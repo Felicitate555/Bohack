@@ -153,9 +153,38 @@ class PipelineTests(unittest.TestCase):
                 stream.setframerate(sample_rate)
                 stream.writeframes(samples.tobytes())
             timeline = audio.analyze(path)
+            mp3 = Path(root) / 'beats.mp3'
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), str(mp3)], check=True, capture_output=True, timeout=20)
+            compressed = audio.analyze(mp3)
         self.assertGreaterEqual(len(timeline['beats']), 8)
         self.assertTrue(any(abs(t - 1.0) < .1 for t in timeline['beats']))
         self.assertGreater(timeline['duration'], 5)
+        self.assertEqual(compressed['rhythm_status'], 'estimated')
+        self.assertGreaterEqual(len(compressed['beats']), 8)
+        self.assertLess(abs(compressed['bpm'] - timeline['bpm']), 6)
+
+    def test_unrhythmic_audio_does_not_produce_binding_beats(self):
+        import numpy as np
+        sample_rate = 11025
+        t = np.arange(sample_rate * 8) / sample_rate
+        signals = [np.zeros(len(t)), .25 * np.sin(2 * np.pi * 440 * t),
+                   np.random.default_rng(7).normal(0, .1, len(t))]
+        with tempfile.TemporaryDirectory(dir='data') as root:
+            for index, signal in enumerate(signals):
+                path = Path(root) / f'nonrhythmic_{index}.wav'
+                with wave.open(str(path), 'wb') as stream:
+                    stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(sample_rate)
+                    stream.writeframes((np.clip(signal, -1, 1) * 32767).astype('<i2').tobytes())
+                timeline = audio.analyze(path)
+                self.assertIsNone(timeline['bpm'])
+                self.assertEqual(timeline['beats'], [])
+                self.assertEqual(timeline['strong_beats'], [])
+                self.assertEqual(timeline['rhythm_status'], 'unreliable')
+
+    def test_old_or_unreliable_beat_analysis_is_not_used_for_binding(self):
+        self.assertEqual(browser_render.usable_beats({'beats':[1, 2], 'strong_beats':[2]}), ([], []))
+        self.assertEqual(browser_render.usable_beats({'rhythm_status':'unreliable', 'beats':[1], 'strong_beats':[1]}), ([], []))
+        self.assertEqual(browser_render.usable_beats({'rhythm_status':'estimated', 'beats':[1, 2], 'strong_beats':[2]}), ([1, 2], [2]))
 
     def test_growth_and_animation_events_are_validated(self):
         item = {'heading':'复利','narration':'固定增长率示意','key':'增长','visual':'growth','spec':{

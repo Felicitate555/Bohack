@@ -39,6 +39,13 @@ def music_mix_filter(duration, volume, voice):
             "[voice][ducked]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
 
 
+def usable_beats(timeline):
+    timeline = timeline or {}
+    if timeline.get("rhythm_status") != "estimated":
+        return [], []
+    return timeline.get("beats", []), timeline.get("strong_beats", [])
+
+
 def render(project, outdir, voice, update, quality="preview", music=None, beat_timeline=None, music_volume=.18, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, previous_run=None):
     if not available():
         raise RuntimeError("高质量渲染需要安装 Playwright 和 Chromium；请使用 Docker 启动或选择轻量渲染。")
@@ -59,8 +66,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
             pass
     old_scenes = old_manifest.get("scenes", [])
     manifest = {"version": 1, "scenes": []}
-    beats = (beat_timeline or {}).get("beats", [])
-    strong_beats = (beat_timeline or {}).get("strong_beats", [])
+    beats, strong_beats = usable_beats(beat_timeline)
     # The synchronous Playwright API runs an event loop in this thread. Produce
     # narration beforehand so asyncio.run() never nests inside that loop.
     voice_durations = []

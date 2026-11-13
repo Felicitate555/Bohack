@@ -33,9 +33,17 @@ def analyze(path):
     flux = np.maximum(0, flux - np.convolve(flux, np.ones(17)/17, mode="same"))
     rate = sr / hop
     lo, hi = int(rate*60/190), min(len(flux)-1, int(rate*60/65))
-    correlations = [float(np.dot(flux[:-lag], flux[lag:])) for lag in range(lo, hi+1)] if hi >= lo else []
+    # Remove the positive flux baseline before comparing periods. Otherwise
+    # stationary noise can obtain a large correlation merely by being loud.
+    centered = flux - flux.mean()
+    correlations = []
+    for lag in range(lo, hi + 1):
+        a, b = centered[:-lag], centered[lag:]
+        norm = float(np.linalg.norm(a) * np.linalg.norm(b))
+        correlations.append(float(np.dot(a, b) / norm) if norm > 1e-12 else 0.0)
     lag = lo + int(np.argmax(correlations)) if correlations else 0
-    bpm = round(60 * rate / lag, 1) if lag and max(correlations, default=0) > 1e-8 else None
+    periodicity = max(0.0, max(correlations, default=0.0))
+    bpm = round(60 * rate / lag, 1) if lag and periodicity >= .2 else None
     threshold = float(np.percentile(flux, 70))
     peaks = [i for i in range(1, len(flux)-1) if flux[i] > max(threshold, 1e-6) and flux[i] >= flux[i-1] and flux[i] > flux[i+1]]
     # Pick measured onset peaks with a tempo-based refractory interval.
@@ -47,10 +55,18 @@ def analyze(path):
             selected.append((t, float(flux[i])))
         elif flux[i] > selected[-1][1]:
             selected[-1] = (t, float(flux[i]))
+    if len(selected) < 4:
+        bpm = None
     strength_threshold = float(np.percentile([s for _, s in selected], 75)) if selected else math.inf
     bands = []
     for start in range(0, math.ceil(duration), 8):
         block = energy[int(start*rate):int((start+8)*rate)]
         if block:
             bands.append({"start": start, "end": min(start+8, round(duration, 2)), "energy": round(float(np.mean(block)), 4)})
-    return {"duration": round(duration, 2), "bpm": bpm, "beats": [round(t, 3) for t, _ in selected], "strong_beats": [round(t, 3) for t, s in selected if s >= strength_threshold], "segments": bands, "method": "spectral_flux_estimate"}
+    reliable = bpm is not None
+    return {"duration": round(duration, 2), "bpm": bpm,
+            "beats": [round(t, 3) for t, _ in selected] if reliable else [],
+            "strong_beats": [round(t, 3) for t, s in selected if s >= strength_threshold] if reliable else [],
+            "onsets": [round(t, 3) for t, _ in selected], "periodicity": round(periodicity, 3),
+            "rhythm_status": "estimated" if reliable else "unreliable",
+            "segments": bands, "method": "spectral_flux_estimate"}
