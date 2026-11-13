@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .render import run, split_text, stamp, caption_ranges
+from .render import run, split_text, stamp, caption_ranges, RenderCancelled
 from .services import speech
 from .providers.siliconflow import ProviderError
 
@@ -68,6 +68,8 @@ def usable_beats(timeline):
 
 
 def render(project, outdir, voice, update, quality="preview", music=None, beat_timeline=None, music_volume=.18, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, previous_run=None):
+    check_cancel = getattr(update, 'check_cancel', lambda: None)
+    check_cancel()
     if not available():
         raise RuntimeError("高质量渲染需要安装 Playwright 和 Chromium；请使用 Docker 启动或选择轻量渲染。")
     from playwright.sync_api import sync_playwright
@@ -104,9 +106,12 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                     pending.append(i)
             if pending:
                 speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, pending)
+            check_cancel()
             for i in range(len(scenes)):
                 info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(outdir / f"voice_{i}.mp3")], capture_output=True, text=True, check=True, timeout=20)
                 voice_durations.append(float(info.stdout.strip()))
+        except RenderCancelled:
+            raise
         except ProviderError as exc:
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
@@ -166,6 +171,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                     try:
                         for frame in range(frames):
+                            check_cancel()
                             args = [scene, i, len(scenes), frame/fps, duration, local_beats, local_strong, w, h]
                             try:
                                 page.evaluate("a => window.renderFrame(...a)", args)
@@ -203,6 +209,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
         mux_audio(base, output, [outdir / f"voice_{i}.mp3" for i in range(len(scenes))] if voice else [], durations, music, music_volume)
     else:
         base.replace(output)
+    check_cancel()
     (outdir / "subtitles.srt").write_text("\n".join(captions), encoding="utf-8")
     (outdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     return round(elapsed, 2)

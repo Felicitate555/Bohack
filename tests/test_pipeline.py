@@ -6,6 +6,7 @@ import unittest
 import sys
 import types
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from PIL import Image
@@ -17,6 +18,60 @@ from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_cancel_during_frames_stops_encoder(self):
+        plan = director.validate(director.example())
+        plan['scenes'] = plan['scenes'][:1]
+        for engine in ('browser', 'light'):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory(dir='data') as root:
+                calls = []
+                def update(message): pass
+                def check():
+                    calls.append(1)
+                    if len(calls) >= 3: raise render.RenderCancelled()
+                update.check_cancel = check
+                proc = MagicMock(); proc.stderr.read.return_value = b''; proc.wait.return_value = 0
+                page = MagicMock(); page.screenshot.return_value = b'frame'
+                browser = MagicMock(); browser.new_page.return_value = page
+                context = MagicMock(); context.__enter__.return_value.chromium.launch.return_value = browser
+                module = types.ModuleType('playwright.sync_api'); module.sync_playwright = lambda: context
+                with patch.dict(sys.modules, {'playwright.sync_api': module}), patch.object(browser_render, 'available', return_value=True), patch.object(render.shutil, 'which', return_value='ffmpeg'), patch.object(render, 'frame', return_value=MagicMock()), patch('subprocess.Popen', return_value=proc):
+                    with self.assertRaises(render.RenderCancelled):
+                        if engine == 'browser': browser_render.render(plan, Path(root), False, update)
+                        else: render.render(plan, Path(root), False, update)
+                proc.kill.assert_called_once()
+
+    def test_cancel_render_waits_for_worker_and_preserves_last_video(self):
+        started, proceed = threading.Event(), threading.Event()
+        def renderer(plan, outdir, voice, update, *args):
+            started.set()
+            if not proceed.wait(5): raise RuntimeError('test timeout')
+            update.check_cancel()
+            raise AssertionError('cancelled render must not continue')
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(browser_render, 'available', return_value=True), patch.object(browser_render, 'render', side_effect=renderer):
+            plan = main.create(main.Create(example=True)); pid = plan['id']
+            old = '123456abcdef'
+            folder = main.project_dir(pid) / old; folder.mkdir()
+            (folder / 'video.mp4').write_bytes(b'old video')
+            plan['job'] = {'status':'done', 'run_id':old, 'duration':4, 'voice':False}
+            main.save(pid, plan)
+            try:
+                main.start_render(pid, main.RenderRequest())
+                self.assertTrue(started.wait(3))
+                main.cancel_render(pid)
+                state = main.read_project(pid)['job']
+                self.assertEqual(state['status'], 'running')
+                self.assertIn('取消', state['message'])
+                self.assertEqual(Path(main.export(pid, 'mp4').path), folder / 'video.mp4')
+                proceed.set()
+                deadline = time.monotonic() + 5
+                while main.render_lock.locked() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertFalse(main.render_lock.locked())
+                self.assertEqual(main.read_project(pid)['job']['status'], 'cancelled')
+                self.assertEqual(Path(main.export(pid, 'mp4').path), folder / 'video.mp4')
+            finally:
+                proceed.set()
+
     def test_render_lock_released_when_task_cannot_start(self):
         for preview in (False, True):
             for failure in ('save', 'thread'):

@@ -18,6 +18,10 @@ WHITE = (239, 232, 213)
 MUTED = (148, 139, 118)
 
 
+class RenderCancelled(Exception):
+    """A user-requested cooperative render stop."""
+
+
 @lru_cache(maxsize=32)
 def font(size):
     candidates = [os.getenv("VIBELAB_FONT", ""), "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "C:/Windows/Fonts/msyh.ttc", "/System/Library/Fonts/PingFang.ttc"]
@@ -131,6 +135,8 @@ def caption_ranges(parts, duration, speech_duration):
 
 
 def render(project, outdir, voice, update, target_seconds=None, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None):
+    check_cancel = getattr(update, 'check_cancel', lambda: None)
+    check_cancel()
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise RuntimeError("未找到 FFmpeg/FFprobe，请安装后重试。")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +148,8 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             for i in range(len(scenes)):
                 result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(outdir / f"voice_{i}.mp3")], capture_output=True, text=True, check=True, timeout=20)
                 voice_durations.append(float(result.stdout.strip()))
+        except RenderCancelled:
+            raise
         except ProviderError as exc:
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
@@ -165,6 +173,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
             for f in range(frames):
+                check_cancel()
                 proc.stdin.write(frame(scene, i, len(scenes), f/FPS, duration).tobytes())
             proc.stdin.close()
             err = proc.stderr.read()
@@ -185,5 +194,6 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
     concat.write_text("".join("file '" + p.name + "'\n" for p in clips), encoding="utf-8")
     output = outdir / "video.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(concat), "-c", "copy", "-movflags", "+faststart", str(output)])
+    check_cancel()
     (outdir / "subtitles.srt").write_text("\n".join(captions), encoding="utf-8")
     return round(elapsed, 2)

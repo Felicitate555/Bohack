@@ -31,6 +31,8 @@ if envfile.exists():
 
 app = FastAPI(title="VibeLab")
 render_lock = threading.Lock()
+render_tasks_lock = threading.RLock()
+render_tasks = {}
 planning_lock = threading.Lock()
 planning_active = set()
 
@@ -480,30 +482,75 @@ def start_render(pid: str, body: RenderRequest):
     previous_run = (last_completed or {}).get("run_id")
     job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "last_completed": last_completed}
     plan["job"] = job
+    cancelled = threading.Event()
 
     def work():
+        def check_cancel():
+            if cancelled.is_set():
+                raise render.RenderCancelled()
         def update(message):
-            plan["job"]["message"] = message
-            save(pid, plan)
+            with render_tasks_lock:
+                check_cancel()
+                plan["job"]["message"] = message
+                save(pid, plan)
+        update.check_cancel = check_cancel
+        def persist():
+            with render_tasks_lock:
+                save(pid, plan)
         def report(event):
-            plan.setdefault("usage_events", []).append(event)
-            save(pid, plan)
+            with render_tasks_lock:
+                plan.setdefault("usage_events", []).append(event)
+                save(pid, plan)
+        error, duration = None, None
         try:
+            check_cancel()
             if body.generate_media:
-                media_assets.prepare(plan, project_dir(pid), update, lambda:save(pid,plan))
+                media_assets.prepare(plan, project_dir(pid), update, persist)
+            check_cancel()
             if body.engine == "browser":
                 music = project_dir(pid) / "music.bin" if plan.get("music") else None
                 duration = browser_render.render(plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run)
             else:
                 duration = render.render(plan, project_dir(pid) / run_id, body.voice, update, plan.get("target_seconds"), body.voice_provider, body.voice_name, body.voice_speed, report)
-            plan["job"].update({"status": "done", "message": "成片已完成", "duration": duration})
         except Exception as exc:
-            plan["job"].update({"status": "error", "message": str(exc)[:600]})
+            error = exc
         finally:
-            try: save(pid, plan)
-            finally: render_lock.release()
-    start_locked_render_worker(pid, plan, work)
+            try:
+                with render_tasks_lock:
+                    if cancelled.is_set():
+                        message = "渲染已取消。" + ("之前的成片仍可使用。" if last_completed else "")
+                        plan["job"].update({"status": "cancelled", "message": message})
+                    elif error is not None:
+                        plan["job"].update({"status": "error", "message": str(error)[:600]})
+                    else:
+                        plan["job"].update({"status": "done", "message": "成片已完成", "duration": duration})
+                    try: save(pid, plan)
+                    finally: render_tasks.pop(pid, None)
+            finally:
+                render_lock.release()
+    with render_tasks_lock:
+        render_tasks[pid] = (cancelled, plan)
+        try:
+            start_locked_render_worker(pid, plan, work)
+        except BaseException:
+            render_tasks.pop(pid, None)
+            raise
     return job
+
+
+@app.post("/api/projects/{pid}/render/cancel")
+def cancel_render(pid: str):
+    project_dir(pid)
+    with render_tasks_lock:
+        task = render_tasks.get(pid)
+        if not task:
+            raise HTTPException(409, "没有可取消的渲染任务。")
+        cancelled, plan = task
+        cancelled.set()
+        plan["job"]["cancel_requested"] = True
+        plan["job"]["message"] = "正在取消，等待当前请求或合成步骤结束。"
+        save(pid, plan)
+        return plan["job"]
 
 
 @app.get("/api/projects/{pid}/export/{kind}")
