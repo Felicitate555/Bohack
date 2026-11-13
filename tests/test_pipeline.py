@@ -17,6 +17,27 @@ from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_render_lock_released_when_task_cannot_start(self):
+        for preview in (False, True):
+            for failure in ('save', 'thread'):
+                with self.subTest(preview=preview, failure=failure), tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(browser_render, 'available', return_value=True):
+                    plan = main.create(main.Create(example=True))
+                    target = lambda: main.preview_scene(plan['id'], 0) if preview else main.start_render(plan['id'], main.RenderRequest())
+                    try:
+                        if failure == 'save':
+                            with patch.object(main, 'save', side_effect=OSError('disk error')):
+                                with self.assertRaises(OSError): target()
+                        else:
+                            with patch.object(main.threading, 'Thread') as thread:
+                                thread.return_value.start.side_effect = RuntimeError('thread error')
+                                with self.assertRaises(RuntimeError): target()
+                        self.assertFalse(main.render_lock.locked())
+                        if failure == 'thread':
+                            job = main.read_project(plan['id'])['preview_job' if preview else 'job']
+                            self.assertEqual(job['status'], 'error')
+                    finally:
+                        if main.render_lock.locked(): main.render_lock.release()
+
     def test_narration_segments_do_not_accumulate_codec_delay(self):
         import numpy as np
         rate = 22050

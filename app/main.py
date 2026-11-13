@@ -93,6 +93,16 @@ def save(pid, obj):
     tmp.replace(path)
 
 
+def start_locked_render_worker(pid, plan, work):
+    """Transfer the already-held render lock to the worker only on startup."""
+    try:
+        save(pid, plan)
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        render_lock.release()
+        raise
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "ffmpeg": bool(shutil.which("ffmpeg")), "model_configured": bool(model_registry.api_key()), "browser_renderer": browser_render.available()}
@@ -302,7 +312,6 @@ def preview_scene(pid: str, index: int):
         raise HTTPException(409, "已有任务运行，请稍后再试。")
     preview_id = uuid.uuid4().hex[:12]
     plan["preview_job"] = {"status": "running", "index": index, "id": preview_id, "message": "正在预览镜头"}
-    save(pid, plan)
     def work():
         def update(message):
             plan["preview_job"]["message"] = message
@@ -316,7 +325,7 @@ def preview_scene(pid: str, index: int):
         finally:
             try: save(pid, plan)
             finally: render_lock.release()
-    threading.Thread(target=work, daemon=True).start()
+    start_locked_render_worker(pid, plan, work)
     return plan["preview_job"]
 
 
@@ -471,7 +480,6 @@ def start_render(pid: str, body: RenderRequest):
     previous_run = (last_completed or {}).get("run_id")
     job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "last_completed": last_completed}
     plan["job"] = job
-    save(pid, plan)
 
     def work():
         def update(message):
@@ -494,7 +502,7 @@ def start_render(pid: str, body: RenderRequest):
         finally:
             try: save(pid, plan)
             finally: render_lock.release()
-    threading.Thread(target=work, daemon=True).start()
+    start_locked_render_worker(pid, plan, work)
     return job
 
 
