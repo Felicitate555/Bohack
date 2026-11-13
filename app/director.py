@@ -147,4 +147,6 @@ def visual_issues(plan):
             issues.append(f"镜头 {i} 的复利动画需要有效本金、每期增长率和整数期数")
         if scene["visual"] == "network" and spec.get("parameters", {}).get("edges_invalid"):
             issues.append(f"镜头 {i} 的关系网络含无效节点或连线")
+        if scene["visual"] in {"network", "dots"} and spec.get("animation", {}).get("node_motions_invalid"):
+            issues.append(f"镜头 {i} 的节点运动含无效编号、范围或重复节点")
     return issues

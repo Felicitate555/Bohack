@@ -15,6 +15,7 @@ RENDERER_CONTRACT = """可用画面组件与必需参数（只能使用这些已
 - dots：最多60个点逐渐出现；parameters.count 是实际点数，不填则为示意。
 - network：点之间逐步建立关系；parameters.count 是实际节点数。parameters.edges 可选，用从 0 开始的节点下标表示无向关系，如 [[0,1],[1,2]]；未填写时展示所有两两连线。屏幕上会显示实际连线计数。
 若收到旧计划中 edges_invalid=true，表示之前的关系数据未通过校验；请重新输出正确 edges，不要复制 edges_invalid 标记。
+点阵和关系网络可选 animation.node_motions：每个节点最多一条移动，例如 {"node":1,"start":0.2,"end":0.8,"from_x":0,"from_y":0,"to_x":60,"to_y":-30,"easing":"smooth","beat_binding":false}。node 从0开始且小于明确填写的 count，start/end 为镜头时间比例且 end 大于 start，各偏移量为 -90 至 90 的画面单位。连线跟随对应节点；运动会限制在安全画面内。非法或重复节点会使镜头无法渲染，不要复制 node_motions_invalid 标记。这是直线插值，不是任意轨迹。
 - formula：按 × 和 = 分段显示 parameters.formula 的纯文本；不支持 LaTeX 排版和任意公式变形。
 - compare：parameters.value 为0到100的真实百分数，secondary_value 为另一个百分数，labels 为两端短标签。图形是一根进度条，不是饼图或翻牌。
 - bars/curve：spec.elements 是非负数数组 [{"label":"标签","value":数值}]，最多8项；bars至少1项，curve至少2项。不知道数据不能编造，也不要使用这两种图。

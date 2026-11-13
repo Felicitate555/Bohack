@@ -18,6 +18,21 @@ from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_node_motion_is_validated_and_round_trips(self):
+        motion = {'node': 1, 'start': .2, 'end': .8, 'from_x': 0, 'from_y': 0,
+                  'to_x': 60, 'to_y': -30, 'easing': 'linear', 'beat_binding': True}
+        scene = {'heading':'节点', 'narration':'节点移动', 'key':'关系', 'visual':'network',
+                 'spec':{'parameters':{'count':3, 'edges':[[0,1]]}, 'animation':{'node_motions':[motion]}}}
+        plan = director.validate({'scenes':[scene]})
+        self.assertEqual(plan['scenes'][0]['spec']['animation']['node_motions'], [motion])
+        self.assertEqual(director.validate(plan)['scenes'][0]['spec']['animation']['node_motions'], [motion])
+        self.assertFalse(director.visual_issues(plan))
+        for broken in ({**motion, 'node': 3}, {**motion, 'to_x': 1000}, {**motion, 'end': .1}):
+            scene['spec']['animation']['node_motions'] = [broken]
+            self.assertTrue(director.visual_issues(director.validate({'scenes':[scene]})))
+        scene['spec']['animation']['node_motions'] = [motion, motion]
+        self.assertTrue(director.visual_issues(director.validate({'scenes':[scene]})))
+
     def test_cancel_during_frames_stops_encoder(self):
         plan = director.validate(director.example())
         plan['scenes'] = plan['scenes'][:1]

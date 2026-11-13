@@ -2,16 +2,16 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('app/scene_canvas.html', 'utf8');
 const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
-let texts = [], lines = 0;
+let texts = [], lines = 0, endpoints = [];
 const ctx = new Proxy({
   createRadialGradient(){return {addColorStop(){}}},
   fillText(value){texts.push(String(value))},
-  lineTo(){lines++},
+  lineTo(a,b){lines++;endpoints.push([a,b])},
 }, {get(o,k){return k in o ? o[k] : ()=>{}},set(o,k,v){o[k]=v;return true}});
 const sandbox = {document:{querySelector(){return {getContext(){return ctx}}}},window:{},Math};
 vm.runInNewContext(script, sandbox);
 function scene(visual, parameters){return {heading:'测试',key:'重点',detail:'说明',narration:'一句解释。',visual,spec:{parameters,animation:{keyframes:[0,.65]}}}}
-async function draw(s){texts=[];lines=0;await sandbox.window.renderFrame(s,0,1,4,4,[],[],960,540)}
+async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.renderFrame(s,0,1,t,4,[],[],960,540)}
 (async()=>{
   await draw(scene('network',{count:23}));
   assert(texts.some(t=>t.includes('253 / 253')), '23 people should draw all 253 pairs');
@@ -30,6 +30,16 @@ async function draw(s){texts=[];lines=0;await sandbox.window.renderFrame(s,0,1,4
   const event = {property:'translate_x',start:.2,end:.6,from:0,to:40,easing:'linear',beat_binding:true};
   assert.equal(sandbox.eventValue(event, 2.1, 10, [2.1,6.2]), 0);
   assert.equal(sandbox.eventValue(event, 6.2, 10, [2.1,6.2]), 40);
+  const motion = {node:1,start:.2,end:.8,from_x:0,from_y:0,to_x:60,to_y:-30,easing:'linear',beat_binding:true};
+  const before = sandbox.networkPositions(3, {}, [motion], 2.1, 10, [2.1,8.1]);
+  const after = sandbox.networkPositions(3, {}, [motion], 8.1, 10, [2.1,8.1]);
+  assert.equal(after[1][0] - before[1][0], 60);
+  assert.equal(after[1][1] - before[1][1], -30);
+  assert.equal(after[0][0], before[0][0], 'other nodes stay in place');
+  let moving=scene('network',{count:3,edges:[[0,1]]});moving.spec.animation.node_motions=[motion];
+  await draw(moving,4);
+  const expected=sandbox.networkPositions(3,{},[motion],4,4,[])[1];
+  assert(endpoints.some(([x,y])=>Math.abs(x-expected[0])<.001&&Math.abs(y-expected[1])<.001), 'edge endpoint follows moved node');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');
   console.log('Network, scattering, growth and beat-bound event checks passed.');

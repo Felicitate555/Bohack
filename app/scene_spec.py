@@ -85,6 +85,32 @@ def relations(raw, count):
     return result, invalid
 
 
+def node_motions(raw, count):
+    """Validate one bounded declarative movement per numbered node."""
+    if raw is None or raw == []:
+        return [], False
+    if not isinstance(raw, list) or not count or len(raw) > count:
+        return [], True
+    result, seen, invalid = [], set(), False
+    for item in raw:
+        if not isinstance(item, dict):
+            invalid = True
+            continue
+        node = bounded(item.get("node"), 0, count - 1, integer=True)
+        times = [bounded(item.get(key), 0, 1) for key in ("start", "end")]
+        offsets = [bounded(item.get(key), -90, 90) for key in ("from_x", "from_y", "to_x", "to_y")]
+        if (node is None or isinstance(item.get("node"), bool) or node in seen or
+                None in times or None in offsets or times[1] <= times[0]):
+            invalid = True
+            continue
+        seen.add(node)
+        result.append(dict(zip(("node", "start", "end", "from_x", "from_y", "to_x", "to_y"),
+                               [node, *times, *offsets]),
+                           easing=item.get("easing") if item.get("easing") in ("linear", "smooth") else "smooth",
+                           beat_binding=item.get("beat_binding") is True))
+    return result, invalid
+
+
 def scene_spec(scene):
     raw = scene.get("spec") if isinstance(scene.get("spec"), dict) else {}
     visual = scene.get("visual") if scene.get("visual") in TYPES else "flow"
@@ -108,13 +134,15 @@ def scene_spec(scene):
     count = int(number(p.get("count"), 2, 2, 60)) if p.get("count") not in (None, "") and number(p.get("count"), None, 2, 60) is not None else None
     edges, edges_invalid = relations(p.get("edges"), count)
     edges_invalid = edges_invalid or p.get("edges_invalid") is True
+    motions, motions_invalid = node_motions(animation.get("node_motions"), count)
+    motions_invalid = motions_invalid or animation.get("node_motions_invalid") is True
     return {
         "version": 1,
         "knowledge_point": str(raw.get("knowledge_point", scene.get("detail", "")))[:160],
         "visual_type": visual,
         "elements": elements,
         "layout": {"safe_margin": 0.06, "composition": "left-title-right-graphic", "graphic_x": number(layout.get("graphic_x"), 650, 520, 750), "graphic_y": number(layout.get("graphic_y"), 255, 200, 300)},
-        "animation": {"action": str(animation.get("action", "逐步呈现"))[:80], "motion": motion, "keyframes": [start, finish], "beat_binding": bool(animation.get("beat_binding", True)), "events": animation_events(animation.get("events"))},
+        "animation": {"action": str(animation.get("action", "逐步呈现"))[:80], "motion": motion, "keyframes": [start, finish], "beat_binding": bool(animation.get("beat_binding", True)), "events": animation_events(animation.get("events")), "node_motions": motions, "node_motions_invalid": motions_invalid},
         "transition": raw.get("transition") if raw.get("transition") in {"fade", "cut"} else "fade",
         "style": {"background": "#0b0b0f", "accent": "#d6b36a", "text": "#f5f1e8"},
         "media": {"kind": media.get("kind") if media.get("kind") in {"animation", "image", "video"} else "animation", "prompt": str(media.get("prompt") or "")[:1000], "asset_id": asset_id, "request_id": request_id, "submission_state": media.get("submission_state") if media.get("submission_state") in {"uncertain", "submitted"} else ""},
