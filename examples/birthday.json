@@ -1,0 +1,14 @@
+{
+  "title": "生日悖论：23 个人就够了吗？",
+  "topic": "为什么只要23个人，撞生日的概率就超过一半？",
+  "scenes": [
+    {"heading":"多少人，才会撞生日？","narration":"一个房间里，要有多少人，才有超过一半的机会，出现相同的生日？","visual":"question","key":"23","detail":"答案比直觉小得多","spec":{"parameters":{"candidates":["50？","100？","180？","23"]},"animation":{"motion":"step","keyframes":[0,0.85]}}},
+    {"heading":"答案是 23 个人","narration":"答案是二十三个人。听起来不可思议，一年有三百六十五天，人怎么会这么容易撞生日？","visual":"dots","key":"23","detail":"一年有 365 天","spec":{"parameters":{"count":23}}},
+    {"heading":"我们想错了问题","narration":"我们常常只想自己和别人是否同一天生日，但问题问的是房间里的任意两个人。比较的对象变多了，答案也会很不一样。","visual":"flow","key":"任意两个人","detail":"不是只比较自己与其他人","spec":{"parameters":{"labels":["我与他人","任意两人"]}}},
+    {"heading":"直觉忽略了配对","narration":"把每个人都和其他人配对。二十三个人一共有二百五十三对可能的组合，它们让撞生日的机会逐渐增加。","visual":"network","key":"253 对","detail":"23 × 22 ÷ 2 = 253 对","spec":{"parameters":{"count":23},"animation":{"motion":"linear"}}},
+    {"heading":"先算没有人撞生日","narration":"直接计算很复杂，所以我们反过来算。假设每一天生日机会相同，二十三个人生日都不同的概率，是这些分数相乘。","visual":"formula","key":"49.27%","detail":"365/365 × 364/365 × … × 343/365","spec":{"parameters":{"formula":"365/365 × 364/365 × … × 343/365"}}},
+    {"heading":"再用一减去它","narration":"至少有一对生日相同，是全部不同的对立情况。所以一减去百分之四十九点二七，得到百分之五十点七三。","visual":"compare","key":"50.73%","detail":"1 − 49.27% = 50.73%","spec":{"parameters":{"value":50.73,"secondary_value":49.27,"labels":["至少一对相同","全部不同"]}}},
+    {"heading":"注意：配对并不独立","narration":"不过，这二百五十三对关系不是互相独立的。因为同一个人会参与多次配对，所以不能简单用二百五十三除以三百六十五当作答案。","visual":"network","key":"共享参与者","detail":"253 对并非 253 个独立事件","spec":{"parameters":{"count":23},"animation":{"motion":"smooth"}}},
+    {"heading":"组合，比人数增长更快","narration":"二十三个人，二百五十三种配对。生日悖论提醒我们，当组合快速增加时，直觉往往会低估事情发生的机会。","visual":"ending","key":"23 → 253","detail":"人数不多，可能的配对却很多"}
+  ]
+}

@@ -1,0 +1,28 @@
+services:
+  vibelab:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      SF_MODEL_WRITER: ${SF_MODEL_WRITER:-}
+      SF_MODEL_DIRECTOR: ${SF_MODEL_DIRECTOR:-}
+      SF_MODEL_DIRECTOR_PRO: ${SF_MODEL_DIRECTOR_PRO:-}
+      SF_MODEL_ANIMATION: ${SF_MODEL_ANIMATION:-}
+      SF_MODEL_REVIEWER: ${SF_MODEL_REVIEWER:-}
+      SF_MODEL_IMAGE: ${SF_MODEL_IMAGE:-}
+      SF_MODEL_IMAGE_FAST: ${SF_MODEL_IMAGE_FAST:-}
+      SF_MODEL_VIDEO: ${SF_MODEL_VIDEO:-}
+      SF_MODEL_SPEECH: ${SF_MODEL_SPEECH:-}
+      SF_MODEL_SPEECH_ALT: ${SF_MODEL_SPEECH_ALT:-}
+      SF_PRICE_IMAGE_CNY: ${SF_PRICE_IMAGE_CNY:-}
+      SF_PRICE_VIDEO_SECOND_CNY: ${SF_PRICE_VIDEO_SECOND_CNY:-}
+    volumes:
+      - vibelab_data:/app/data
+    restart: unless-stopped
+volumes:
+  vibelab_data:
