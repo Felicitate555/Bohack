@@ -43,13 +43,16 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
  }else if(type==='bars'||type==='curve'){
   let values=spec.elements||[];let negative=values.some(v=>v.value<0);if(negative)values=[];let max=Math.max(1,...values.map(v=>v.value||0));x.strokeStyle='#746447';x.beginPath();x.moveTo(170,350);x.lineTo(820,350);x.stroke();let coords=[];values.forEach((v,i)=>{let px=220+i*(540/Math.max(1,values.length-1)),py=340-(v.value||0)/max*160*p;coords.push([px,py]);if(type==='bars'){x.fillStyle='#c5a369';x.fillRect(px-20,py,40,350-py)}text(v.label,px,380,15,muted,'center')});if(type==='curve'){x.strokeStyle=gold;x.lineWidth=3;x.beginPath();coords.forEach(([a,b],i)=>i?x.lineTo(a,b):x.moveTo(a,b));x.stroke();coords.forEach(([a,b])=>dot(a,b,4))}if(!values.length)text(negative?'暂不支持负值图表':'没有可绘制的数据',480,260,20,muted,'center');text(s.key,95,180,42,gold);
  }else if(type==='growth'){
-  let principal=params.principal,rate=params.rate,periods=params.periods,left=160,right=830,top=165,bottom=355;
+  let principal=params.principal,rate=params.rate,periods=params.periods,left=160,right=830,top=180,bottom=330;
   if(principal==null||rate==null||periods==null){text('请填写本金、增长率和期数',480,265,22,muted,'center')}else{
-   let total=principal*Math.pow(1+rate/100,periods),progressPeriods=periods*p,shown=principal*Math.pow(1+rate/100,progressPeriods),span=Math.max(total,principal*1.05);
+   let total=principal*Math.pow(1+rate/100,periods),progressPeriods=periods*p,completed=Math.min(periods,Math.floor(progressPeriods+1e-9)),shown=principal*Math.pow(1+rate/100,completed),simple=principal*(1+rate/100*completed),interest=completed?principal*Math.pow(1+rate/100,completed-1)*rate/100:0,span=Math.max(total,principal*1.05);
    panel(120,130,750,260);x.strokeStyle='rgba(214,179,106,.22)';x.lineWidth=1;x.beginPath();x.moveTo(left,top);x.lineTo(left,bottom);x.lineTo(right,bottom);x.stroke();
-   let y0=bottom-(principal/span)*(bottom-top-15);x.strokeStyle='rgba(167,186,214,.40)';x.beginPath();x.moveTo(left,y0);x.lineTo(right,y0);x.stroke();
-   x.strokeStyle=gold;x.lineWidth=3;x.beginPath();let steps=Math.max(1,Math.ceil(120*p));for(let i=0;i<=steps;i++){let q=Math.min(p,i/120),v=principal*Math.pow(1+rate/100,periods*q),px=left+(right-left)*q,py=bottom-v/span*(bottom-top-15);x[i?'lineTo':'moveTo'](px,py)}x.stroke();let px=left+(right-left)*p,py=bottom-shown/span*(bottom-top-15);dot(px,py,5*pulse);
-   const fmt=n=>n>=1e9?n.toExponential(2):n.toLocaleString('en-US',{maximumFractionDigits:2});text('本金 '+fmt(principal),170,158,15,muted);text(`每期 ${rate}% · ${periods} 期`,820,158,15,muted,'right');text('第 '+progressPeriods.toFixed(1)+' 期',160,389,15,muted);text(fmt(shown),820,389,24,gold,'right');text('固定增长率的数学示意，不代表实际收益',820,418,13,muted,'right');
+   const valueAt=q=>{let n=Math.min(periods,Math.floor(periods*q)),fraction=periods*q-n;return principal*Math.pow(1+rate/100,n)*(1+rate/100*fraction)};
+   const plot=(color,value)=>{x.strokeStyle=color;x.lineWidth=2.5;x.beginPath();let steps=Math.max(1,Math.ceil(120*p));for(let i=0;i<=steps;i++){let q=Math.min(p,i/120),px=left+(right-left)*q,py=bottom-value(q)/span*(bottom-top-10);x[i?'lineTo':'moveTo'](px,py)}x.stroke()};
+   plot('#83b8dc',q=>principal*(1+rate/100*periods*q));plot(gold,valueAt);
+   let px=left+(right-left)*p,py=bottom-valueAt(p)/span*(bottom-top-10);dot(px,py,4*pulse);
+   const fmt=n=>n>=1e9?n.toExponential(2):n.toLocaleString('en-US',{maximumFractionDigits:2});text('本金 '+fmt(principal),160,156,15,muted);text(`每期 ${rate}% · ${periods} 期`,830,156,15,muted,'right');text('复利',175,183,14,gold);text('单利（仅本金计息）',245,183,14,'#83b8dc');
+   text('第 '+completed+' 期',160,360,15,muted);text('单利 '+fmt(simple),410,360,16,'#83b8dc');text(fmt(shown),830,360,24,gold,'right');text(completed?`本期利息 ${fmt(interest)} 计入本金`:'等待首期利息计入本金',160,382,15,warm,'left',610);text('固定增长率的数学示意，不代表实际收益',830,418,13,muted,'right');
   }
  }else if(type==='divergence'){
   panel(105,138,750,260);let left=140,top=170,width=670,height=190;

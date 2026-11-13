@@ -21,6 +21,9 @@ async function draw(s){texts=[];lines=0;await sandbox.window.renderFrame(s,0,1,4
   assert(lines >= 9 && texts.includes('光线与散射方向为示意'), 'scattering should draw rays and mark illustration');
   await draw(scene('growth',{principal:100,rate:10,periods:3}));
   assert(texts.includes('133.1'), '100 compounded at 10% for 3 periods should be 133.1');
+  assert(texts.some(t=>t.includes('130')), 'simple interest comparison should end at 130');
+  assert(texts.some(t=>t.includes('12.1')), 'third-period interest should be 12.1');
+  assert(texts.some(t=>t.includes('计入本金')), 'the interest should be described as added to principal');
   const event = {property:'translate_x',start:.2,end:.6,from:0,to:40,easing:'linear',beat_binding:true};
   assert.equal(sandbox.eventValue(event, 2.1, 10, [2.1,6.2]), 0);
   assert.equal(sandbox.eventValue(event, 6.2, 10, [2.1,6.2]), 40);
