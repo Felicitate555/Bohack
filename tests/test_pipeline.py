@@ -17,6 +17,46 @@ from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_narration_segments_do_not_accumulate_codec_delay(self):
+        import numpy as np
+        rate = 22050
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            root = Path(folder)
+            base = root / 'base.mp4'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=size=64x64:rate=15:duration=9', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(base)], check=True, capture_output=True, timeout=20)
+            voices = []
+            for i, frequency in enumerate((440, 660, 880)):
+                voice = root / f'voice_{i}.mp3'
+                subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'sine=frequency={frequency}:duration=0.8:sample_rate=44100', str(voice)], check=True, capture_output=True, timeout=20)
+                voices.append(voice)
+            output = root / 'output.mp4'
+            browser_render.mux_audio(base, output, voices, [3, 3, 3], None, .18)
+            pcm = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-map', '0:a', '-f', 'f32le', '-ac', '1', '-ar', str(rate), '-'], check=True, capture_output=True, timeout=20).stdout
+            samples = np.frombuffer(pcm, dtype='<f4')
+            offsets = []
+            for i in range(3):
+                start = int(i * 3 * rate)
+                for j in range(start, start + rate // 2, 110):
+                    if np.sqrt(np.mean(samples[j:j+110] ** 2)) > .008:
+                        offsets.append(j / rate - 3 * i)
+                        break
+            self.assertEqual(len(offsets), 3)
+            self.assertLess(max(offsets) - min(offsets), .03)
+            music = root / 'music.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=4:sample_rate=44100', str(music)], check=True, capture_output=True, timeout=20)
+            mixed = root / 'mixed.mp4'
+            browser_render.mux_audio(base, mixed, voices, [3, 3, 3], music, .18)
+            pcm = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(mixed), '-map', '0:a', '-f', 'f32le', '-ac', '1', '-ar', str(rate), '-'], check=True, capture_output=True, timeout=20).stdout
+            samples = np.frombuffer(pcm, dtype='<f4')
+            third = samples[int(6.2 * rate):int(6.6 * rate)]
+            freqs = np.fft.rfftfreq(len(third), 1 / rate)
+            spectrum = np.abs(np.fft.rfft(third))
+            self.assertAlmostEqual(freqs[np.argmax(spectrum)], 880, delta=3)
+            music_only = root / 'music_only.mp4'
+            browser_render.mux_audio(base, music_only, [], [3, 3, 3], music, .18)
+            probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=duration', '-of', 'default=nw=1:nk=1', str(music_only)], check=True, capture_output=True, text=True, timeout=20)
+            self.assertAlmostEqual(float(probe.stdout.strip()), 9, delta=.05)
+
     def test_scattering_optical_path_survives_validation(self):
         scene = {'heading':'光线', 'narration':'光线穿过介质', 'key':'散射', 'visual':'scattering', 'spec':{'parameters':{'optical_path':'long'}}}
         plan = director.validate({'scenes':[scene]})
