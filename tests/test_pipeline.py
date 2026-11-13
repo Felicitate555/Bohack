@@ -1,7 +1,11 @@
 import tempfile
+import json
+import wave
+import threading
 import unittest
 import sys
 import types
+import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from PIL import Image
@@ -9,10 +13,215 @@ from PIL import Image
 from app import director
 from app.providers import siliconflow
 from app.services import media_assets
-from app import browser_render, main
+from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_music_is_ducked_during_narration(self):
+        import numpy as np
+        rate = 16000
+        t = np.arange(rate * 4) / rate
+        voice = np.where(t < 2, .5 * np.sin(2 * np.pi * 440 * t), 0)
+        music = .3 * np.sin(2 * np.pi * 220 * t)
+        with tempfile.TemporaryDirectory(dir='data') as root:
+            root = Path(root)
+            for name, samples in [('voice.wav', voice), ('music.wav', music)]:
+                with wave.open(str(root / name), 'wb') as f:
+                    f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
+                    f.writeframes((samples * 32767).astype('<i2').tobytes())
+            # Inspect the ducked music alone so narration does not affect the measurement.
+            filt = browser_render.music_mix_filter(4, 1, True)
+            result = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(root / 'voice.wav'), '-i', str(root / 'music.wav'), '-filter_complex', filt, '-map', '[a]', '-f', 'f32le', '-ac', '1', '-ar', str(rate), '-'], capture_output=True, check=True, timeout=20)
+            samples = np.frombuffer(result.stdout, dtype='<f4')
+            # The voice is at 440 Hz and music at 220 Hz; measure only the music band.
+            def amplitude(chunk):
+                return abs(np.dot(chunk, np.exp(-2j * np.pi * 220 * np.arange(len(chunk)) / rate))) / len(chunk)
+            loud = amplitude(samples[rate//2:rate*3//2])
+            quiet = amplitude(samples[rate*5//2:rate*3])
+            self.assertLess(loud, quiet * .7)
+
+    def test_failed_render_preserves_previous_export_and_retry_cache(self):
+        class ImmediateThread:
+            def __init__(self, target, **kwargs): self.target = target
+            def start(self): self.target()
+        calls = []
+        def renderer(plan, outdir, *args):
+            calls.append(args[-1])
+            if len(calls) == 2:
+                self.assertTrue(Path(main.export(plan['id'], 'mp4').path).is_file())
+                raise RuntimeError('模拟编码失败')
+            outdir.mkdir(parents=True, exist_ok=True)
+            (outdir / 'video.mp4').write_bytes(b'video')
+            (outdir / 'subtitles.srt').write_text('subtitle', encoding='utf-8')
+            return 4.0
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(browser_render, 'available', return_value=True), patch.object(browser_render, 'render', side_effect=renderer):
+            plan = main.create(main.Create(example=True))
+            pid = plan['id']
+            main.start_render(pid, main.RenderRequest())
+            original = Path(main.export(pid, 'mp4').path)
+            main.start_render(pid, main.RenderRequest())
+            self.assertEqual(main.read_project(pid)['job']['status'], 'error')
+            self.assertIn('模拟编码失败', main.read_project(pid)['job']['message'])
+            self.assertEqual(Path(main.export(pid, 'mp4').path), original)
+            main.start_render(pid, main.RenderRequest())
+            self.assertEqual(calls[2], original.parent.name)
+            self.assertNotEqual(Path(main.export(pid, 'mp4').path), original)
+
+    def test_example_edit_render_and_download_paths(self):
+        class ImmediateThread:
+            def __init__(self, target, **kwargs): self.target = target
+            def start(self): self.target()
+        def render_mock(plan, outdir, *args):
+            outdir.mkdir(parents=True, exist_ok=True)
+            (outdir / 'video.mp4').write_bytes(b'video')
+            (outdir / 'subtitles.srt').write_text('subtitle', encoding='utf-8')
+            return 4.0
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(browser_render, 'available', return_value=True), patch.object(browser_render, 'render', side_effect=render_mock):
+            plan = main.create(main.Create(example=True))
+            plan['scenes'][0]['heading'] = '已编辑'
+            main.update_project(plan['id'], plan)
+            main.start_render(plan['id'], main.RenderRequest())
+            self.assertEqual(main.read_project(plan['id'])['scenes'][0]['heading'], '已编辑')
+            for kind in ['mp4', 'srt', 'json']:
+                self.assertTrue(Path(main.export(plan['id'], kind).path).is_file())
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    def test_background_planning_exposes_state_while_worker_runs(self):
+        started, proceed, finished = threading.Event(), threading.Event(), threading.Event()
+        original_save = main.save
+        def generate(topic, seconds, mode, progress, checkpoint):
+            progress('测试阶段')
+            started.set()
+            if not proceed.wait(3): raise RuntimeError('测试等待超时')
+            return director.validate(director.example()), []
+        def save(pid, plan):
+            original_save(pid, plan)
+            if (plan.get('planning_job') or {}).get('status') == 'done': finished.set()
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main, 'save', side_effect=save), patch.object(director, 'generate', side_effect=generate):
+            task = main.start_planning(main.Create(topic='测试'))
+            self.assertTrue(started.wait(2))
+            state = main.read_project(task['id'])['planning_job']
+            self.assertEqual(state['status'], 'running')
+            self.assertEqual(state['message'], '测试阶段')
+            proceed.set()
+            self.assertTrue(finished.wait(2))
+
+    def test_long_storyboard_supports_more_than_eight_scenes(self):
+        scene = {'heading':'解释','narration':'一段解释','key':'重点','visual':'flow'}
+        self.assertEqual(len(director.validate({'scenes':[dict(scene) for _ in range(12)]})['scenes']), 12)
+        with self.assertRaises(ValueError):
+            director.validate({'scenes':[dict(scene) for _ in range(17)]})
+
+    def test_custom_network_edges_validate_and_survive_roundtrip(self):
+        scene = {'heading':'关系', 'narration':'三个节点', 'key':'关系', 'visual':'network',
+                 'spec': {'parameters': {'count':3, 'edges':[[0,1],[1,2],[1,0]]}}}
+        plan = director.validate({'scenes':[scene]})
+        self.assertEqual(plan['scenes'][0]['spec']['parameters']['edges'], [[0,1],[1,2]])
+        self.assertEqual(director.visual_issues(director.validate(plan)), [])
+        scene['spec']['parameters']['edges'] = [[0,4]]
+        broken = director.validate({'scenes':[scene]})
+        self.assertTrue(director.visual_issues(director.validate(broken)))
+
+    def test_caption_ranges_follow_text_length_and_include_final_hold(self):
+        spans = list(render.caption_ranges(['短句', '长长长长长长长长'], 12, 10))
+        self.assertAlmostEqual(spans[0][1], 2.0)
+        self.assertAlmostEqual(spans[1][0], 2.0)
+        self.assertEqual(spans[1][1], 12)
+
+    def test_beat_analysis_detects_generated_audio_onsets(self):
+        import numpy as np
+        sample_rate = 11025
+        samples = np.zeros(sample_rate * 6, dtype='<i2')
+        for position in np.arange(.5, 5.6, .5):
+            start = int(position * sample_rate)
+            samples[start:start+80] = (np.sin(np.arange(80) * .6) * 24000).astype('<i2')
+        with tempfile.TemporaryDirectory(dir='data') as root:
+            path = Path(root) / 'beats.wav'
+            with wave.open(str(path), 'wb') as stream:
+                stream.setnchannels(1)
+                stream.setsampwidth(2)
+                stream.setframerate(sample_rate)
+                stream.writeframes(samples.tobytes())
+            timeline = audio.analyze(path)
+        self.assertGreaterEqual(len(timeline['beats']), 8)
+        self.assertTrue(any(abs(t - 1.0) < .1 for t in timeline['beats']))
+        self.assertGreater(timeline['duration'], 5)
+
+    def test_growth_and_animation_events_are_validated(self):
+        item = {'heading':'复利','narration':'固定增长率示意','key':'增长','visual':'growth','spec':{
+            'parameters':{'principal':100,'rate':10,'periods':3},
+            'animation':{'events':[{'property':'translate_x','start':0.1,'end':0.6,'from':-30,'to':0,'beat_binding':True},
+                                   {'property':'scale','start':0,'end':1,'from':1,'to':10},
+                                   {'property':'code','start':0,'end':1,'from':0,'to':1}]}}}
+        plan = director.validate({'scenes':[item]})
+        self.assertEqual(director.visual_issues(plan), [])
+        self.assertEqual(len(plan['scenes'][0]['spec']['animation']['events']), 1)
+        self.assertEqual(plan['scenes'][0]['spec']['parameters']['periods'], 3)
+        item['spec']['parameters']['periods'] = 3.5
+        self.assertTrue(director.visual_issues(director.validate({'scenes':[item]})))
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    def test_planning_checkpoint_survives_later_failure(self):
+        class ImmediateThread:
+            def __init__(self, target, **kwargs): self.target = target
+            def start(self): self.target()
+        def generator(topic, seconds, mode, progress, checkpoint):
+            partial = director.validate(director.example())
+            checkpoint(partial, [{'role': 'director'}])
+            raise ValueError('动画规划中断')
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(director, 'generate', side_effect=generator):
+            task = main.start_planning(main.Create(topic='测试', creative_mode='director'))
+            saved = main.read_project(task['id'])
+            self.assertEqual(saved['planning_job']['status'], 'error')
+            self.assertIn('动画规划中断', saved['planning_job']['message'])
+            self.assertTrue(saved['scenes'])
+
+    def test_interrupted_planning_becomes_recoverable_error(self):
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
+            pid = '11541154-1154-4154-8154-115411541154'
+            main.save(pid, {'planning_job': {'status': 'running'}, 'scenes': []})
+            self.assertEqual(main.read_project(pid)['planning_job']['status'], 'error')
+
+    def test_retry_reuses_script_and_preserves_previous_usage(self):
+        class ImmediateThread:
+            def __init__(self, target, **kwargs): self.target = target
+            def start(self): self.target()
+        script = {'title': '已经保存的稿'}
+        def generate(topic, seconds, mode, progress, checkpoint, initial_script=None):
+            self.assertEqual(initial_script, script)
+            return director.validate(director.example()), [{'role': 'director'}]
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(director, 'generate', side_effect=generate):
+            pid = '22542254-2254-4254-8254-225422542254'
+            main.save(pid, {'id': pid, 'topic': '概率', 'creative_mode': 'director', 'scenes': [], 'knowledge_script': script,
+                            'usage_events': [{'role': 'writer'}], 'planning_job': {'status': 'error'}})
+            main.retry_planning(pid)
+            saved = main.read_project(pid)
+            self.assertEqual(saved['planning_job']['status'], 'done')
+            self.assertEqual([e['role'] for e in saved['usage_events']], ['writer', 'director'])
+
+    def test_retry_refuses_to_overwrite_existing_storyboard(self):
+        from fastapi import HTTPException
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
+            pid = '33543354-3354-4354-8354-335433543354'
+            main.save(pid, {'id': pid, 'scenes': [{'heading': '保留'}], 'planning_job': {'status': 'error'}})
+            with self.assertRaises(HTTPException): main.retry_planning(pid)
+            self.assertEqual(main.read_project(pid)['scenes'][0]['heading'], '保留')
+
+    def test_legacy_visuals_and_missing_chart_data(self):
+        def scene(visual, heading, action, **spec):
+            return {'heading': heading, 'narration': '解释。', 'key': 'internal_id', 'detail': '', 'visual': visual,
+                    'spec': {'animation': {'action': action}, **spec}}
+        plan = director.validate({'scenes': [
+            scene('curve', '微小差异', '两条曲线逐渐分叉'),
+            scene('geometry', '洛伦兹', '展示双翼轨迹'),
+            scene('flow', '变化放大', '扰动逐级放大'),
+            scene('timeline', '两种状态', '', parameters={'candidates': ['相同', '不同']}),
+            scene('curve', '数据', ''),
+        ]})
+        self.assertEqual([s['visual'] for s in plan['scenes']], ['divergence', 'lorenz', 'amplify', 'contrast', 'curve'])
+        self.assertEqual(plan['scenes'][0]['key'], '微小差异')
+        self.assertEqual(len(director.visual_issues(plan)), 1)
+
     @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
     @patch('app.providers.siliconflow.chat')
     def test_writer_director_and_math_route(self, chat):
@@ -24,19 +233,38 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(usage), 2)
         self.assertEqual(plan['scenes'][0]['spec']['parameters']['count'], 23)
         self.assertEqual(plan['scenes'][0]['spec']['media']['kind'], 'animation')
+        director_prompt = chat.call_args_list[1].args[1][0]['content']
+        self.assertIn('animation.action 只记录设计意图', director_prompt)
+        self.assertIn('不能指定或声称知道实际节拍', director_prompt)
 
-    @patch.dict('os.environ', {'SF_PRICE_IMAGE_CNY':'0.30'}, clear=False)
-    def test_media_budget_and_local_asset(self):
-        scene = {'spec':{'media':{'kind':'image','prompt':'blue sky','asset_id':'','request_id':'','submission_state':''}}}
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    @patch('app.providers.siliconflow.chat')
+    def test_unrenderable_chart_is_replanned(self, chat):
+        chat.side_effect = [
+            ('{"scenes":[{"heading":"变化","narration":"解释变化","key":"变化","visual":"curve"}]}', {'role':'writer'}),
+            ('{"scenes":[{"heading":"变化","narration":"解释变化","key":"变化","visual":"flow","spec":{"parameters":{"labels":["开始","结果"]}}}]}', {'role':'writer'}),
+        ]
+        plan, events = director.generate('变化', 30, 'fast')
+        self.assertEqual(plan['scenes'][0]['visual'], 'flow')
+        self.assertEqual(len(events), 2)
+        self.assertIn('不要编造数据', chat.call_args_list[1].args[1][-1]['content'])
+
+    def test_all_selected_images_are_generated_without_price_configuration(self):
+        scenes = [{'spec': {'media': {'kind': 'image', 'prompt': 'blue sky', 'asset_id': '', 'request_id': '', 'submission_state': ''}}} for _ in range(2)]
         with tempfile.TemporaryDirectory(dir='data') as root:
-            plan = {'creative_mode':'smart','scenes':[scene]}
-            with patch.object(siliconflow, 'image', return_value='https://example.test/a'), patch.object(siliconflow, 'download', side_effect=lambda url, path, *a: Image.new('RGB',(4,4)).save(path,format='PNG')):
-                media_assets.prepare(plan, Path(root), .2, lambda s:None, lambda:None)
-                self.assertFalse(scene['spec']['media']['asset_id'])
-                media_assets.prepare(plan, Path(root), .3, lambda s:None, lambda:None)
-            ident = scene['spec']['media']['asset_id']
-            self.assertTrue((Path(root)/'assets'/(ident+'.png')).is_file())
-            self.assertEqual(plan['usage_events'][0]['actual_cny'], None)
+            plan = {'creative_mode': 'smart', 'scenes': scenes}
+            with patch.object(siliconflow, 'image', return_value='https://example.test/a') as image, patch.object(siliconflow, 'download', side_effect=lambda url, path, *a: Image.new('RGB', (4, 4)).save(path, format='PNG')):
+                media_assets.prepare(plan, Path(root), lambda s: None, lambda: None)
+                self.assertEqual(image.call_count, 2)
+                self.assertEqual(image.call_args.kwargs['role'], 'image')
+            for scene in scenes:
+                self.assertTrue((Path(root) / 'assets' / (scene['spec']['media']['asset_id'] + '.png')).is_file())
+
+    def test_fast_mode_uses_configurable_fast_image_role(self):
+        scene = {'spec': {'media': {'kind': 'image', 'prompt': 'blue sky', 'asset_id': '', 'request_id': '', 'submission_state': ''}}}
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(siliconflow, 'image', return_value='https://example.test/a') as image, patch.object(siliconflow, 'download', side_effect=lambda url, path, *a: Image.new('RGB', (4, 4)).save(path, format='PNG')):
+            media_assets.prepare({'creative_mode': 'fast', 'scenes': [scene]}, Path(root), lambda s: None, lambda: None)
+            self.assertEqual(image.call_args.kwargs['role'], 'image_fast')
 
     @patch('app.providers.siliconflow.post', return_value=b'audio')
     def test_speech_request(self, post):
@@ -45,6 +273,22 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(args[0], '/audio/speech')
         self.assertEqual(args[1]['voice'], 'FunAudioLLM/CosyVoice2-0.5B:anna')
         self.assertTrue(kwargs['binary'])
+
+    @patch('app.providers.siliconflow.post', return_value=b'audio')
+    def test_moss_narration_has_speaker_tag(self, post):
+        with patch('app.providers.siliconflow.model', return_value='fnlp/MOSS-TTSD-v0.5'):
+            siliconflow.speech('这是旁白。', 'anna', 1, 'speech_alt')
+        self.assertEqual(post.call_args.args[1]['input'], '[S1]这是旁白。')
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    @patch('app.providers.siliconflow.requests.post')
+    def test_provider_reports_actionable_failure_without_response_body(self, request):
+        request.return_value = MagicMock(ok=False, status_code=403, headers={'x-siliconcloud-trace-id': 'trace_123'})
+        with self.assertRaises(siliconflow.ProviderError) as exc:
+            siliconflow.post('/audio/speech', {})
+        self.assertIn('HTTP 403', str(exc.exception))
+        self.assertIn('模型权限', str(exc.exception))
+        self.assertIn('trace_123', str(exc.exception))
 
     def test_unchanged_scene_reuses_rendered_clip(self):
         plan = director.validate(director.example())
@@ -72,16 +316,51 @@ class PipelineTests(unittest.TestCase):
             browser_render.render(plan, Path(root)/('b'*12), False, lambda s:None, previous_run=first)
             self.assertEqual(popen.call_count, 1)
 
-    @patch.dict('os.environ', {'SF_PRICE_IMAGE_CNY':'0.30'}, clear=False)
-    def test_comparison_labels_only_media_cost(self):
-        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
-            p = main.create(main.Create(example=True, creative_mode='smart'))
-            p['scenes'][0]['spec']['media']['kind'] = 'image'
-            main.save(p['id'], p)
-            comparison = main.cost_plan(p['id'])
-            self.assertEqual(comparison['local_only']['media_cny'], 0)
-            self.assertEqual(comparison['mixed']['media_cny'], .3)
-            self.assertIn('仅媒体', comparison['scope'])
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    @patch('app.providers.siliconflow.requests.post')
+    def test_flagship_stream_stops_when_total_deadline_is_exceeded(self, post):
+        response = post.return_value.__enter__.return_value
+        response.ok = True
+        response.iter_content.return_value = iter([b':', b' ', b'\n', b' '])
+        with patch('app.providers.siliconflow.time.monotonic', side_effect=[0, 1, 2, 601, 602]):
+            with self.assertRaisesRegex(siliconflow.ProviderError, '总时限'):
+                siliconflow.chat('director_pro', [{'role': 'user', 'content': '示例'}])
+        post.return_value.__exit__.assert_called_once()
+
+    def test_flagship_stream_rejects_oversized_unterminated_line(self):
+        response = MagicMock()
+        response.iter_content.return_value = iter([b'a', b'b', b'c', b'd'])
+        with self.assertRaisesRegex(siliconflow.ProviderError, '大小限制'):
+            list(siliconflow.stream_lines(response, siliconflow.time.monotonic() + 10, max_bytes=3))
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    @patch('app.providers.siliconflow.requests.post')
+    def test_flagship_stream_and_usage(self, post):
+        response = post.return_value.__enter__.return_value
+        response.ok = True
+        stream = '\n'.join([
+            'data: ' + json.dumps({'choices': [{'delta': {'reasoning_content': 'hidden'}, 'finish_reason': None}]}),
+            'data: ' + json.dumps({'choices': [{'delta': {'content': '{"title":"好"}'}, 'finish_reason': 'stop'}], 'usage': {'total_tokens': 17}}, ensure_ascii=False),
+            'data: [DONE]',
+        ]) + '\n'
+        response.iter_content.return_value = (bytes([b]) for b in stream.encode('utf-8'))
+        result, event = siliconflow.chat('director_pro', [{'role': 'user', 'content': '示例'}], max_tokens=500)
+        self.assertEqual(json.loads(result)['title'], '好')
+        self.assertEqual(event['usage']['total_tokens'], 17)
+        self.assertTrue(post.call_args.kwargs['json']['stream'])
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
+    @patch('app.providers.siliconflow.chat')
+    def test_director_pipeline_has_animation_pass(self, chat):
+        original = {'heading':'解释','narration':'真实旁白','key':'重点','visual':'flow','spec':{'parameters':{'labels':['开始','结束']}}}
+        improved = {**original, 'narration':'不应覆盖', 'visual':'amplify'}
+        chat.side_effect = [(json.dumps({'title':'稿'}, ensure_ascii=False), {'role':'writer'}),
+                            (json.dumps({'title':'片','scenes':[original]}, ensure_ascii=False), {'role':'director_pro'}),
+                            (json.dumps({'scenes':[improved]}, ensure_ascii=False), {'role':'animation'})]
+        plan, events = director.generate('主题', 60, 'director')
+        self.assertEqual([e['role'] for e in events], ['writer', 'director_pro', 'animation'])
+        self.assertEqual(plan['scenes'][0]['visual'], 'amplify')
+        self.assertEqual(plan['scenes'][0]['narration'], '真实旁白')
 
 
 if __name__ == '__main__':

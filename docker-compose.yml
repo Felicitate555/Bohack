@@ -19,8 +19,6 @@ services:
       SF_MODEL_VIDEO: ${SF_MODEL_VIDEO:-}
       SF_MODEL_SPEECH: ${SF_MODEL_SPEECH:-}
       SF_MODEL_SPEECH_ALT: ${SF_MODEL_SPEECH_ALT:-}
-      SF_PRICE_IMAGE_CNY: ${SF_PRICE_IMAGE_CNY:-}
-      SF_PRICE_VIDEO_SECOND_CNY: ${SF_PRICE_VIDEO_SECOND_CNY:-}
     volumes:
       - vibelab_data:/app/data
     restart: unless-stopped

@@ -1,61 +1,43 @@
-import os
 import time
 import uuid
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from PIL import Image
 from ..providers import siliconflow
 from ..providers.model_registry import model
 
 
-def price(name):
-    try:
-        n = Decimal(os.getenv(name, ""))
-        return n if n.is_finite() and n > 0 else None
-    except InvalidOperation:
-        return None
-
-
-def prepare(plan, directory, budget_cny, update, persist):
-    """Generate bounded optional assets; never turn an unknown price into zero."""
-    if plan.get("creative_mode") == "fast":
+def prepare(plan, directory, update, persist):
+    """Generate selected scene assets and retain request state for safe resumption."""
+    if not any((s.get("spec", {}).get("media") or {}).get("kind") in {"image", "video"} for s in plan["scenes"]):
+        plan.setdefault("warnings", []).append("分镜中没有选择 AI 图片或视频素材，因此未调用生图或视频模型。")
+        persist()
         return
-    max_images = 1
-    max_videos = 1 if plan.get("creative_mode") == "director" else 0
-    image_count = video_count = 0
-    remaining = Decimal(str(budget_cny))
     asset_dir = directory / "assets"
     asset_dir.mkdir(exist_ok=True)
     for idx, scene in enumerate(plan["scenes"]):
         media = scene["spec"]["media"]
         kind = media.get("kind")
-        if kind not in {"image", "video"} or not media.get("prompt"):
+        if kind not in {"image", "video"}:
             continue
+        if not media.get("prompt"):
+            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 未填写素材描述，已使用程序动画。")
+            persist(); continue
         if media.get("asset_id") and (asset_dir / (media["asset_id"] + (".mp4" if kind == "video" else ".png"))).exists():
             continue
         if media.get("submission_state") == "uncertain" and not media.get("request_id"):
-            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 上一次素材请求结果不明确，已停止重复提交；请检查平台账单与任务。")
+            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 上一次素材请求结果不明确，已停止重复提交；请检查平台任务后决定是否重置。")
             persist(); continue
-        if kind == "image" and image_count >= max_images or kind == "video" and video_count >= max_videos:
-            continue
-        unit = price("SF_PRICE_IMAGE_CNY" if kind == "image" else "SF_PRICE_VIDEO_SECOND_CNY")
-        estimate = unit * (5 if kind == "video" else 1) if unit else None
-        if not media.get("request_id") and (not estimate or estimate > remaining):
-            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 缺少价格配置或预算不足，使用程序化动画。")
-            persist(); continue
-        if kind == "image": image_count += 1
-        else: video_count += 1
         asset_id = uuid.uuid4().hex
         event = None
         target = asset_dir / (asset_id + (".mp4" if kind == "video" else ".png"))
         update(f"正在制作镜头 {idx+1} 的{'图片' if kind == 'image' else '视频'}素材")
         try:
             if kind == "image":
-                remaining -= estimate
-                event = {"role": "image", "model": model("image"), "estimated_cny": str(estimate), "actual_cny": None, "status": "submitted"}
+                image_role = "image_fast" if plan.get("creative_mode") == "fast" else "image"
+                event = {"role": "image", "model": model(image_role), "status": "submitted"}
                 media["submission_state"] = "uncertain"
                 plan.setdefault("usage_events", []).append(event); persist()
-                url = siliconflow.image(media["prompt"])
+                url = siliconflow.image(media["prompt"], role=image_role)
                 siliconflow.download(url, target, 30*1024*1024)
                 with Image.open(target) as img:
                     if img.width * img.height > 20_000_000:
@@ -65,13 +47,12 @@ def prepare(plan, directory, budget_cny, update, persist):
             else:
                 request_id = media.get("request_id")
                 if not request_id:
-                    remaining -= estimate
                     media["submission_state"] = "uncertain"
                     persist()
                     request_id = siliconflow.video_submit(media["prompt"], 5)
                     media["request_id"] = request_id
                     media["submission_state"] = "submitted"
-                    event = {"role": "video", "model": model("video"), "seconds": 5, "estimated_cny": str(estimate), "actual_cny": None, "status": "submitted", "request_id": request_id}
+                    event = {"role": "video", "model": model("video"), "seconds": 5, "status": "submitted", "request_id": request_id}
                     plan.setdefault("usage_events", []).append(event); persist()
                 else:
                     event = next((e for e in reversed(plan.get("usage_events", [])) if e.get("request_id") == request_id), None)

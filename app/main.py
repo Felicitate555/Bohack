@@ -31,6 +31,8 @@ if envfile.exists():
 
 app = FastAPI(title="VibeLab")
 render_lock = threading.Lock()
+planning_lock = threading.Lock()
+planning_active = set()
 
 
 class Create(BaseModel):
@@ -49,7 +51,6 @@ class RenderRequest(BaseModel):
     voice_name: str = "anna"
     voice_speed: float = Field(default=1.0, ge=.5, le=2)
     generate_media: bool = False
-    media_budget_cny: float = Field(default=0, ge=0, le=100)
 
 
 class SceneEdit(BaseModel):
@@ -69,6 +70,11 @@ def read_project(pid):
     if not path.exists():
         raise HTTPException(404, "项目不存在")
     project = json.loads(path.read_text(encoding="utf-8"))
+    with planning_lock:
+        active = pid in planning_active
+    if (project.get("planning_job") or {}).get("status") == "running" and not active:
+        project["planning_job"].update({"status": "error", "message": "上次分镜规划因服务中断而停止；已保存的分镜仍可打开。"})
+        save(pid, project)
     if (project.get("job") or {}).get("status") == "running" and not render_lock.locked():
         project["job"].update({"status": "error", "message": "上次渲染中断，请重新生成。"})
         save(pid, project)
@@ -94,7 +100,7 @@ def health():
 
 @app.get("/api/settings/models")
 def model_settings():
-    return {"configured": bool(model_registry.api_key()), "models": model_registry.registry(), "prices_configured": {"image": media_assets.price("SF_PRICE_IMAGE_CNY") is not None, "video": media_assets.price("SF_PRICE_VIDEO_SECOND_CNY") is not None}}
+    return {"configured": bool(model_registry.api_key()), "models": model_registry.registry()}
 
 
 @app.post("/api/settings/check")
@@ -116,7 +122,7 @@ def projects():
     for path in DATA.glob("*/project.json"):
         try:
             p = json.loads(path.read_text(encoding="utf-8"))
-            results.append({k: p.get(k) for k in ("id", "title", "topic", "updated_at", "mode", "job")})
+            results.append({k: p.get(k) for k in ("id", "title", "topic", "updated_at", "mode", "job", "planning_job")})
         except (OSError, json.JSONDecodeError):
             continue
     return sorted(results, key=lambda p: p.get("updated_at") or "", reverse=True)
@@ -145,23 +151,86 @@ def create(body: Create):
     return plan
 
 
+@app.post("/api/planning")
+def start_planning(body: Create):
+    if body.example:
+        raise HTTPException(400, "离线示例请直接创建。")
+    if body.target_seconds not in (None, 30, 60, 90, 120) or body.creative_mode not in model_registry.MODES:
+        raise HTTPException(400, "请选择可用的创作模式和时长。")
+    topic = body.topic.strip()
+    if not topic:
+        raise HTTPException(400, "先输入一个想制作的主题。")
+    if not model_registry.api_key() and not (os.getenv("LLM_API_KEY", "").strip() and os.getenv("LLM_MODEL", "").strip()):
+        raise HTTPException(400, "请先在 .env 中配置 SILICONFLOW_API_KEY，或选择零密钥示例。")
+    pid = str(uuid.uuid4())
+    plan = {"id": pid, "title": topic[:80], "topic": topic, "scenes": [], "mode": "ai", "creative_mode": body.creative_mode,
+            "target_seconds": body.target_seconds, "job": None, "usage_events": [],
+            "planning_job": {"status": "running", "message": "正在准备创作"}}
+    return launch_planning(pid, plan)
+
+
+def launch_planning(pid, plan):
+    topic, seconds, mode = plan["topic"], plan.get("target_seconds"), plan.get("creative_mode", "smart")
+    old_events = copy.deepcopy(plan.get("usage_events") or [])
+    with planning_lock:
+        if pid in planning_active:
+            raise HTTPException(409, "该项目正在规划中。")
+        planning_active.add(pid)
+    try:
+        plan["planning_job"] = {"status": "running", "message": "正在准备创作"}
+        save(pid, plan)
+        def work():
+            def progress(message):
+                plan["planning_job"]["message"] = message
+                save(pid, plan)
+            def checkpoint(partial, events):
+                if partial["scenes"] or not plan.get("scenes"):
+                    plan.update({"title": partial["title"], "scenes": copy.deepcopy(partial["scenes"])})
+                plan["usage_events"] = old_events + copy.deepcopy(events)
+                if "knowledge_script" in partial:
+                    plan["knowledge_script"] = copy.deepcopy(partial["knowledge_script"])
+                plan["planning_job"]["message"] = "基础分镜已保存，继续优化中" if partial["scenes"] else "编剧草稿已保存，继续规划分镜"
+                save(pid, plan)
+            try:
+                if isinstance(plan.get("knowledge_script"), dict):
+                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint, initial_script=plan["knowledge_script"])
+                else:
+                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint)
+                plan.update(result)
+                plan["usage"] = usage
+                plan["usage_events"] = old_events + (usage if isinstance(usage, list) else [])
+                plan["planning_job"].update({"status": "done", "message": "分镜方案已完成"})
+            except Exception as exc:
+                plan["planning_job"].update({"status": "error", "message": str(exc)[:600] or "分镜生成失败，请检查服务后重试。"})
+            finally:
+                try:
+                    save(pid, plan)
+                finally:
+                    with planning_lock:
+                        planning_active.discard(pid)
+        threading.Thread(target=work, daemon=True).start()
+    except Exception:
+        with planning_lock:
+            planning_active.discard(pid)
+        raise
+    return {"id": pid, "planning_job": plan["planning_job"]}
+
+
+@app.post("/api/projects/{pid}/planning/retry")
+def retry_planning(pid: str):
+    plan = read_project(pid)
+    if (plan.get("planning_job") or {}).get("status") != "error":
+        raise HTTPException(409, "只有中断或失败的规划任务可以重试。")
+    if plan.get("scenes"):
+        raise HTTPException(409, "项目已有保存的分镜，请直接编辑，避免重试覆盖。")
+    if (plan.get("job") or {}).get("status") == "running" or (plan.get("preview_job") or {}).get("status") == "running":
+        raise HTTPException(409, "渲染任务运行中，暂时不能重新规划。")
+    return launch_planning(pid, plan)
+
+
 @app.get("/api/projects/{pid}")
 def get_project(pid: str):
     return read_project(pid)
-
-
-@app.get("/api/projects/{pid}/cost-plan")
-def cost_plan(pid: str):
-    plan = read_project(pid)
-    mode = plan.get("creative_mode", "smart")
-    scenes = director.validate(plan)["scenes"]
-    kinds = [(s.get("spec", {}).get("media") or {}).get("kind") for s in scenes]
-    images = min(kinds.count("image"), 1) if mode != "fast" else 0
-    videos = min(kinds.count("video"), 1) if mode == "director" else 0
-    image_price, video_price = media_assets.price("SF_PRICE_IMAGE_CNY"), media_assets.price("SF_PRICE_VIDEO_SECOND_CNY")
-    known = (not images or image_price is not None) and (not videos or video_price is not None)
-    estimate = float((images * (image_price or 0)) + (videos * 5 * (video_price or 0))) if known else None
-    return {"local_only": {"images": 0, "video_seconds": 0, "media_cny": 0}, "mixed": {"images": images, "video_seconds": videos*5, "media_cny": estimate}, "scope": "仅媒体估算，未含文本、配音、审片及计算成本"}
 
 
 def get_scene(plan, index):
@@ -194,7 +263,7 @@ def reset_scene_media(pid: str, index: int):
     if plan.get("job") and plan["job"].get("status") == "done": plan["job"]["stale"] = True
     if (plan.get("preview_job") or {}).get("index") == index: plan["preview_job"]["status"] = "stale"
     save(pid, plan)
-    return {"ok": True, "message": "素材状态已重置，下次生成可能再次计费。"}
+    return {"ok": True, "message": "素材状态已重置，下次生成会重新请求素材。"}
 
 
 @app.post("/api/projects/{pid}/scenes/{index}/improve")
@@ -221,7 +290,12 @@ def improve_scene(pid: str, index: int, body: SceneEdit):
 @app.post("/api/projects/{pid}/scenes/{index}/preview")
 def preview_scene(pid: str, index: int):
     plan = read_project(pid)
-    scene = get_scene(plan, index)
+    get_scene(plan, index)
+    scene = director.validate(plan)["scenes"][index]
+    issues = director.visual_issues({"scenes": [scene]})
+    if issues:
+        raise HTTPException(400, "；".join(issues) + "。请修改相应参数或选择其他视觉类型。")
+    plan["scenes"][index] = scene
     if not browser_render.available():
         raise HTTPException(400, "镜头预览需要 Playwright 和 Chromium。")
     if not render_lock.acquire(blocking=False):
@@ -282,6 +356,8 @@ def review_scene(pid: str, index: int):
 @app.put("/api/projects/{pid}")
 def update_project(pid: str, body: dict):
     old = read_project(pid)
+    if (old.get("planning_job") or {}).get("status") == "running":
+        raise HTTPException(409, "分镜规划中，请等待完成后编辑。")
     if (old.get("job") or {}).get("status") == "running" or (old.get("preview_job") or {}).get("status") == "running":
         raise HTTPException(409, "渲染中无法修改，请等待完成。")
     try:
@@ -294,6 +370,7 @@ def update_project(pid: str, body: dict):
     plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
     plan["preview_job"] = old.get("preview_job")
     plan["reviews"] = old.get("reviews", {})
+    plan["planning_job"] = old.get("planning_job")
     preview = plan.get("preview_job") or {}
     i = preview.get("index")
     if preview.get("status") == "done" and isinstance(i, int) and (i >= len(plan["scenes"]) or director.validate(old)["scenes"][i] != plan["scenes"][i]):
@@ -360,6 +437,8 @@ def get_music(pid: str):
 @app.post("/api/projects/{pid}/render")
 def start_render(pid: str, body: RenderRequest):
     plan = read_project(pid)
+    if (plan.get("planning_job") or {}).get("status") == "running":
+        raise HTTPException(409, "分镜规划中，请等待完成后生成视频。")
     if body.engine not in {"browser", "light"} or body.quality not in {"preview", "full"}:
         raise HTTPException(400, "不支持该渲染选项。")
     if body.voice_provider not in {"edge", "siliconflow", "moss"}:
@@ -375,11 +454,22 @@ def start_render(pid: str, body: RenderRequest):
     # Bring older projects forward without modifying their stored text.
     validated = director.validate(plan)
     plan["scenes"] = validated["scenes"]
+    issues = director.visual_issues(plan)
+    if issues:
+        raise HTTPException(400, "；".join(issues) + "。请使用 AI 优化对应镜头或选择其他视觉类型，再生成视频。")
+    if body.engine == "light" and any(s["visual"] in {"divergence", "lorenz", "amplify", "contrast", "growth"} for s in plan["scenes"]):
+        raise HTTPException(400, "部分镜头使用了浏览器专属动效，请选择浏览器渲染器。")
+    if not body.generate_media and any((s.get("spec", {}).get("media") or {}).get("kind") in {"image", "video"} and not (s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
+        message = "部分镜头原本计划使用 AI 素材，但此次未开启素材生成，已使用程序动画。"
+        if message not in plan.setdefault("warnings", []): plan["warnings"].append(message)
     if not render_lock.acquire(blocking=False):
         raise HTTPException(409, "已有视频正在渲染，请等待完成后再试。")
     run_id = uuid.uuid4().hex[:12]
-    previous_run = (plan.get("job") or {}).get("run_id") if (plan.get("job") or {}).get("status") == "done" else None
-    job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice}
+    old_job = plan.get("job") or {}
+    last_completed = ({k: old_job.get(k) for k in ("run_id", "duration", "voice", "stale")}
+                      if old_job.get("status") == "done" else old_job.get("last_completed"))
+    previous_run = (last_completed or {}).get("run_id")
+    job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "last_completed": last_completed}
     plan["job"] = job
     save(pid, plan)
 
@@ -392,7 +482,7 @@ def start_render(pid: str, body: RenderRequest):
             save(pid, plan)
         try:
             if body.generate_media:
-                media_assets.prepare(plan, project_dir(pid), body.media_budget_cny, update, lambda:save(pid,plan))
+                media_assets.prepare(plan, project_dir(pid), update, lambda:save(pid,plan))
             if body.engine == "browser":
                 music = project_dir(pid) / "music.bin" if plan.get("music") else None
                 duration = browser_render.render(plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run)
@@ -415,10 +505,12 @@ def export(pid: str, kind: str):
         return FileResponse(project_dir(pid) / "project.json", filename="vibelab-project.json", media_type="application/json")
     job = p.get("job") or {}
     files = {"mp4": ("video.mp4", "video/mp4"), "srt": ("subtitles.srt", "application/x-subrip")}
-    if kind not in files or job.get("status") != "done":
+    completed = job if job.get("status") == "done" else (job.get("last_completed") or {})
+    run_id = completed.get("run_id", "")
+    if kind not in files or len(run_id) != 12 or any(c not in "0123456789abcdef" for c in run_id):
         raise HTTPException(404, "文件尚未生成")
     filename, media = files[kind]
-    path = project_dir(pid) / job["run_id"] / filename
+    path = project_dir(pid) / run_id / filename
     if not path.exists():
         raise HTTPException(404, "文件不存在，请重新渲染")
     return FileResponse(path, media_type=media, filename=filename if kind == "srt" else None)

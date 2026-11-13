@@ -16,16 +16,36 @@ class ProviderError(ValueError):
     pass
 
 
+def response_error(response):
+    status = response.status_code
+    advice = {
+        400: "请求参数或模型不受支持，请检查所选模型和参数。",
+        401: "API Key 无效或未生效，请检查配置并重启服务。",
+        402: "账户无法使用该服务，请检查硅基流动账户。",
+        403: "账户无权使用该模型，请检查模型权限和实名认证。",
+        404: "接口或模型不存在，请检查模型名称和服务地址。",
+        429: "请求达到限额或频率限制，请稍后重试。",
+        500: "模型服务出错，请稍后重试。",
+        503: "模型服务暂时不可用，请稍后重试。",
+        504: "模型服务处理超时，请稍后重试。",
+    }.get(status, "请检查模型和服务状态。")
+    trace = response.headers.get("x-siliconcloud-trace-id", "")
+    trace = trace if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", trace) else ""
+    return ProviderError(f"硅基流动接口返回 HTTP {status}：{advice}" + (f" 请求编号：{trace}" if trace else ""))
+
+
 def post(path, payload, timeout=120, binary=False):
     key = api_key()
     if not key:
         raise ProviderError("请在 .env 中填写 SILICONFLOW_API_KEY 并重启。")
     try:
         response = requests.post(base_url() + path, headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=payload, timeout=timeout)
+    except requests.Timeout as exc:
+        raise ProviderError("连接硅基流动超时，请检查网络或稍后重试。") from exc
     except requests.RequestException as exc:
         raise ProviderError("连接硅基流动失败，请检查网络。") from exc
     if not response.ok:
-        raise ProviderError(f"硅基流动接口返回 HTTP {response.status_code}；请检查密钥、模型名称及账户额度。")
+        raise response_error(response)
     if binary:
         if not response.content or len(response.content) > 30 * 1024 * 1024:
             raise ProviderError("语音接口返回空文件或文件过大。")
@@ -38,12 +58,89 @@ def post(path, payload, timeout=120, binary=False):
 
 def chat(role, messages, max_tokens=4096):
     payload = {"model": model(role), "messages": messages, "max_tokens": max_tokens, "stream": False}
+    if role == "director_pro":
+        return chat_stream(role, payload)
     body = post("/chat/completions", payload)
     try:
-        content = body["choices"][0]["message"]["content"].strip()
+        choice = body["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise ProviderError("模型输出达到长度上限，方案被截断，请重试。")
+        content = choice["message"]["content"].strip()
     except (KeyError, IndexError, AttributeError, TypeError) as exc:
         raise ProviderError("模型没有返回有效内容。") from exc
     return content, {"role": role, "model": model(role), "usage": body.get("usage", {})}
+
+
+def stream_lines(response, deadline, max_bytes=8 * 1024 * 1024):
+    """Read bounded SSE lines, including checking deadlines on partial lines."""
+    pending = bytearray()
+    total = 0
+    for chunk in response.iter_content(chunk_size=1):
+        if time.monotonic() >= deadline:
+            raise ProviderError("旗舰导演响应超过总时限，请稍后重试；已保存的成果不会丢失。")
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise ProviderError("旗舰导演响应超过大小限制，请重试。")
+        pending.extend(chunk)
+        if chunk.endswith(b'\n'):
+            try:
+                yield pending.decode('utf-8').strip()
+            except UnicodeDecodeError as exc:
+                raise ProviderError("旗舰导演返回的数据流编码错误。") from exc
+            pending.clear()
+    if pending:
+        try:
+            yield pending.decode('utf-8').strip()
+        except UnicodeDecodeError as exc:
+            raise ProviderError("旗舰导演返回的数据流编码错误。") from exc
+
+
+def chat_stream(role, payload):
+    """Read flagship output incrementally; never execute returned content."""
+    key = api_key()
+    if not key:
+        raise ProviderError("请在 .env 中填写 SILICONFLOW_API_KEY 并重启。")
+    payload = {**payload, "stream": True}
+    pieces, usage, finish_reason, done = [], {}, None, False
+    deadline = time.monotonic() + 600
+    try:
+        with requests.post(base_url() + "/chat/completions", headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, json=payload, timeout=(20, 240), stream=True) as response:
+            if not response.ok:
+                raise response_error(response)
+            for line in stream_lines(response, deadline):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    done = True
+                    break
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise ProviderError("旗舰导演返回的数据流格式错误。") from exc
+                if event.get("error"):
+                    raise ProviderError("旗舰导演服务返回错误，请检查模型服务状态。")
+                if event.get("usage"):
+                    usage = event["usage"]
+                for choice in event.get("choices") or []:
+                    content = (choice.get("delta") or {}).get("content")
+                    if isinstance(content, str):
+                        pieces.append(content)
+                    finish_reason = choice.get("finish_reason") or finish_reason
+    except requests.Timeout as exc:
+        raise ProviderError("旗舰导演等待响应超时，请稍后重试。") from exc
+    except requests.RequestException as exc:
+        raise ProviderError("旗舰导演连接中断，请检查网络后重试。") from exc
+    if finish_reason == "length":
+        raise ProviderError("旗舰导演输出达到长度上限，方案被截断。")
+    if not done and not finish_reason:
+        raise ProviderError("旗舰导演响应中断，未收到完整结果。")
+    content = "".join(pieces).strip()
+    if not content:
+        raise ProviderError("旗舰导演没有返回最终分镜内容。")
+    return content, {"role": role, "model": payload["model"], "usage": usage}
 
 
 def parse_json(content):
@@ -51,7 +148,11 @@ def parse_json(content):
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ProviderError("模型返回的 JSON 不完整，请重试。") from exc
+        start = content.find("{")
+        try:
+            data, _ = json.JSONDecoder().raw_decode(content[start:]) if start >= 0 else (None, 0)
+        except json.JSONDecodeError:
+            raise ProviderError("模型返回的 JSON 不完整，请重试。") from exc
     if not isinstance(data, dict):
         raise ProviderError("模型返回格式错误，请重试。")
     return data
@@ -61,6 +162,8 @@ def speech(text, voice="anna", speed=1.0, role="speech"):
     ident = model(role)
     if voice not in {"alex", "benjamin", "charles", "david", "anna", "bella", "claire", "diana"}:
         raise ProviderError("不支持该预设音色。")
+    if ident == "fnlp/MOSS-TTSD-v0.5" and not re.match(r"^\s*\[S[12]\]", text):
+        text = "[S1]" + text
     return post("/audio/speech", {"model": ident, "input": text, "voice": f"{ident}:{voice}", "response_format": "mp3", "speed": max(.5, min(2, float(speed))), "stream": False}, binary=True)
 
 

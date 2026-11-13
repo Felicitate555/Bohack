@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from .services import speech
+from .providers.siliconflow import ProviderError
 
 W, H, FPS = 960, 540, 12
 GOLD = (219, 185, 120)
@@ -100,7 +101,7 @@ def frame(scene, index, count, t, duration):
     # Sentence-level subtitle timing uses the actual scene duration.
     lines = split_text(scene["narration"])
     speech_duration = scene.get("spec", {}).get("timing", {}).get("speech_duration", duration)
-    caption = lines[min(len(lines)-1, int(t / max(speech_duration, .1) * len(lines)))]
+    caption = next((part for part, (start, end) in zip(lines, caption_ranges(lines, duration, speech_duration)) if start <= t < end), lines[-1])
     text_fit(d, (480, 463), caption, 22, WHITE, 850, "mm")
     d.line((48, 510, 48 + int(864 * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
     return im
@@ -118,6 +119,17 @@ def stamp(seconds):
     return f"{ms//3600000:02}:{ms//60000%60:02}:{ms//1000%60:02},{ms%1000:03}"
 
 
+def caption_ranges(parts, duration, speech_duration):
+    weights = [max(1, len(p.strip())) for p in parts]
+    total = sum(weights)
+    elapsed = 0
+    for i, weight in enumerate(weights):
+        start = speech_duration * elapsed / total
+        elapsed += weight
+        end = duration if i == len(weights) - 1 else speech_duration * elapsed / total
+        yield start, end
+
+
 def render(project, outdir, voice, update, target_seconds=None, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise RuntimeError("未找到 FFmpeg/FFprobe，请安装后重试。")
@@ -130,8 +142,10 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             for i in range(len(scenes)):
                 result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(outdir / f"voice_{i}.mp3")], capture_output=True, text=True, check=True, timeout=20)
                 voice_durations.append(float(result.stdout.strip()))
+        except ProviderError as exc:
+            raise RuntimeError(str(exc)) from exc
         except Exception as exc:
-            raise RuntimeError("语音生成失败：请检查网络或选择无配音模式。") from exc
+            raise RuntimeError("配音生成或音频解析失败。请检查所选配音服务的网络连接和 FFprobe，或更换配音服务。") from exc
     minimums = [max(3.0, voice_durations[i] + .6) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8)) for i, s in enumerate(scenes)]
     extension = max(0, (target_seconds or 0) - sum(minimums)) / len(scenes)
     clips, captions, elapsed = [], [], 0.0
@@ -162,9 +176,8 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             raise
         clips.append(clip)
         parts = split_text(scene["narration"])
-        for j, part in enumerate(parts):
-            a = elapsed + speech_duration*j/len(parts)
-            b = elapsed + (duration if j == len(parts)-1 else speech_duration*(j+1)/len(parts))
+        for part, (a, b) in zip(parts, caption_ranges(parts, duration, speech_duration)):
+            a, b = elapsed + a, elapsed + b
             captions.append(f"{len(captions)+1}\n{stamp(a)} --> {stamp(b)}\n{part}\n")
         elapsed += duration
     update("正在合成视频与字幕")
