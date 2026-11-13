@@ -20,8 +20,9 @@ RENDERER_CONTRACT = """可用画面组件与必需参数（只能使用这些已
 - bars/curve：spec.elements 是非负数数组 [{"label":"标签","value":数值}]，最多8项；bars至少1项，curve至少2项。不知道数据不能编造，也不要使用这两种图。
 - flow/timeline：parameters.labels 是2至5个简短节点，沿直线依次出现；不支持复杂结构图或不同轨迹。
 - geometry：parameters.sides为3至8的多边形；不支持变形或其他几何对象。
-- growth：演示固定周期复利曲线和本金对比，parameters.principal 为正本金、rate 为每期百分比（0至100）、periods 为1至30的整数；只有题目提供或明确标为假设时才能填写这些参数。计算公式为本金×(1+rate/100)^periods；不表示真实市场回报。
-- scattering：光线散射示意；divergence：两条初始接近的示意曲线逐渐分开，不表示实测数据；lorenz：洛伦兹系统数值积分的双翼轨迹示意；amplify：最多5个标签节点依次放大；contrast：两个状态的简单双栏对比；ending：中心文字收束。
+- growth：演示固定周期复利与仅本金计息的单利对比，并显示每期利息计入本金；parameters.principal 为正本金、rate 为每期百分比（0至100）、periods 为1至30的整数；只有题目提供或明确标为假设时才能填写这些参数。计算公式为本金×(1+rate/100)^periods；不表示真实市场回报。
+- scattering：光源、介质分子与观察方向的定性示意；parameters.optical_path 为 short 或 long，分别展示较短与较长光程，long 显示透射光偏暖；parameters.labels 可指定光源与观察者名称。不是精确的物理模拟。
+- divergence：两条初始接近的示意曲线逐渐分开，不表示实测数据；lorenz：洛伦兹系统数值积分的双翼轨迹示意；amplify：最多5个标签节点依次放大；contrast：两个状态的简单双栏对比；ending：中心文字收束。
 每个镜头结构为 {"heading":"短标题","narration":"自然口播","key":"屏幕重点","detail":"补充短句","visual":"组件名","spec":{"knowledge_point":"本镜头解释什么","parameters":{"count":23,"value":50.7,"secondary_value":49.3,"formula":"1−49.3%=50.7%","labels":["全部不同","至少一对相同"],"candidates":["50人","23人"],"sides":3},"elements":[{"label":"A","value":30}],"animation":{"action":"简短设计意图","motion":"smooth","keyframes":[0,0.65],"beat_binding":true},"transition":"fade","media":{"kind":"animation","prompt":""}}}。示例数字只是说明字段，禁止无关主题照搬。仅填当前组件有用的字段；key 是观众可读的中文、数字或公式，不是内部英文变量名。
 animation.action 只记录设计意图，渲染器不会执行其中的自由文字；必须选现有组件并填写真实参数，不要声称它会绘制当前组件做不到的内容。motion 仅支持 smooth、linear、step；keyframes 是0到1的起止进度；transition 仅有 fade、cut。
 可选 animation.events 为最多6个画面整体的关键帧事件：{"property":"translate_x","start":0.1,"end":0.4,"from":-30,"to":0,"easing":"smooth","beat_binding":true}；property 仅允许 translate_x（-70至70像素）、translate_y（-45至45像素）、scale（0.8至1.2）、opacity（0.25至1），时间 start/end 为镜头0至1比例且 end 必须大于 start。启用 beat_binding 时在有可用音乐节拍且附近有节拍的情况下调整事件起止时间，不代表已提前听到音乐。事件作用于图形与重点文字，不作用于顶部标题和字幕，也不会执行代码。

@@ -17,6 +17,16 @@ from app import browser_render, main, audio, render
 
 
 class PipelineTests(unittest.TestCase):
+    def test_scattering_optical_path_survives_validation(self):
+        scene = {'heading':'光线', 'narration':'光线穿过介质', 'key':'散射', 'visual':'scattering', 'spec':{'parameters':{'optical_path':'long'}}}
+        plan = director.validate({'scenes':[scene]})
+        self.assertEqual(plan['scenes'][0]['spec']['parameters']['optical_path'], 'long')
+        self.assertEqual(director.validate(plan)['scenes'][0]['spec']['parameters']['optical_path'], 'long')
+        scene['spec']['parameters']['optical_path'] = 'unknown'
+        self.assertEqual(director.validate({'scenes':[scene]})['scenes'][0]['spec']['parameters']['optical_path'], 'short')
+        scene['spec']['parameters']['optical_path'] = ['long']
+        self.assertEqual(director.validate({'scenes':[scene]})['scenes'][0]['spec']['parameters']['optical_path'], 'short')
+
     def test_music_is_ducked_during_narration(self):
         import numpy as np
         rate = 16000

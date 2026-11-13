@@ -19,6 +19,9 @@ async function draw(s){texts=[];lines=0;await sandbox.window.renderFrame(s,0,1,4
   assert(texts.some(t=>t.includes('2 / 2')), 'custom graph should use only the requested edges');
   await draw(scene('scattering',{}));
   assert(lines >= 9 && texts.includes('光线与散射方向为示意'), 'scattering should draw rays and mark illustration');
+  assert(texts.includes('光源') && texts.includes('观察者'), 'scattering should identify light source and observer');
+  await draw(scene('scattering',{optical_path:'long'}));
+  assert(texts.some(t=>t.includes('长光程')) && texts.some(t=>t.includes('直射光偏暖')), 'long path should explain warmer transmitted light');
   await draw(scene('growth',{principal:100,rate:10,periods:3}));
   assert(texts.includes('133.1'), '100 compounded at 10% for 3 periods should be 133.1');
   assert(texts.some(t=>t.includes('130')), 'simple interest comparison should end at 130');
