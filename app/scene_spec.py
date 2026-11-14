@@ -2,7 +2,14 @@
 import math
 import re
 
-TYPES = {"question", "dots", "network", "formula", "compare", "flow", "ending", "bars", "curve", "timeline", "geometry", "scattering", "divergence", "lorenz", "amplify", "contrast", "growth"}
+TYPES = {"question", "dots", "network", "formula", "compare", "flow", "ending", "bars", "curve", "timeline", "geometry", "scattering", "divergence", "lorenz", "amplify", "contrast", "growth", "distinct"}
+
+
+def distinct_probability(categories, draws):
+    """Probability of no repeated category in independent uniform draws."""
+    if draws > categories:
+        return 0.0
+    return math.prod((categories - i) / categories for i in range(draws))
 
 
 def resolve_visual(scene):
@@ -34,6 +41,8 @@ def number(value, default, low, high):
 
 
 def bounded(value, low, high, integer=False):
+    if isinstance(value, bool):
+        return None
     try:
         n = float(value)
         if not math.isfinite(n) or not low <= n <= high or (integer and not n.is_integer()):
@@ -146,6 +155,6 @@ def scene_spec(scene):
         "transition": raw.get("transition") if raw.get("transition") in {"fade", "cut"} else "fade",
         "style": {"background": "#0b0b0f", "accent": "#d6b36a", "text": "#f5f1e8"},
         "media": {"kind": media.get("kind") if media.get("kind") in {"animation", "image", "video"} else "animation", "prompt": str(media.get("prompt") or "")[:1000], "asset_id": asset_id, "request_id": request_id, "submission_state": media.get("submission_state") if media.get("submission_state") in {"uncertain", "submitted"} else ""},
-        "parameters": {"optical_path": p.get("optical_path") if p.get("optical_path") in ("short", "long") else "short", "principal": bounded(p.get("principal"), .01, 1000000000), "rate": bounded(p.get("rate"), 0, 100), "periods": bounded(p.get("periods"), 1, 30, integer=True), "count": count, "edges": edges, "edges_invalid": edges_invalid, "sides": int(number(p.get("sides"), 3, 3, 8)), "value": number(p.get("value"), None, 0, 100) if p.get("value") not in (None, "") else None, "secondary_value": number(p.get("secondary_value"), None, 0, 100) if p.get("secondary_value") not in (None, "") else None, "formula": str(p.get("formula", scene.get("detail", "")))[:100], "labels": [str(x)[:24] for x in p.get("labels", [])[:8]] if isinstance(p.get("labels"), list) else [], "candidates": [str(x)[:20] for x in p.get("candidates", [])[:5]] if isinstance(p.get("candidates"), list) else []},
+        "parameters": {"categories": bounded(p.get("categories"), 2, 1000000, integer=True), "draws": bounded(p.get("draws"), 1, 60, integer=True), "optical_path": p.get("optical_path") if p.get("optical_path") in ("short", "long") else "short", "principal": bounded(p.get("principal"), .01, 1000000000), "rate": bounded(p.get("rate"), 0, 100), "periods": bounded(p.get("periods"), 1, 30, integer=True), "count": count, "edges": edges, "edges_invalid": edges_invalid, "sides": int(number(p.get("sides"), 3, 3, 8)), "value": number(p.get("value"), None, 0, 100) if p.get("value") not in (None, "") else None, "secondary_value": number(p.get("secondary_value"), None, 0, 100) if p.get("secondary_value") not in (None, "") else None, "formula": str(p.get("formula", scene.get("detail", "")))[:100], "labels": [str(x)[:24] for x in p.get("labels", [])[:8]] if isinstance(p.get("labels"), list) else [], "candidates": [str(x)[:20] for x in p.get("candidates", [])[:5]] if isinstance(p.get("candidates"), list) else []},
         "assets": [], "timing": {"start": None, "end": None},
     }

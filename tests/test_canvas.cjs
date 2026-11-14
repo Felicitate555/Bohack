@@ -40,6 +40,12 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   await draw(moving,4);
   const expected=sandbox.networkPositions(3,{},[motion],4,4,[])[1];
   assert(endpoints.some(([x,y])=>Math.abs(x-expected[0])<.001&&Math.abs(y-expected[1])<.001), 'edge endpoint follows moved node');
+  const birthday=sandbox.distinctProbability(365,23);
+  assert(Math.abs(birthday-.4927027657)<.0000001, '23 uniform independent draws should produce the correct distinct probability');
+  assert.equal(sandbox.distinctProbability(2,3),0, 'more draws than categories must produce a collision');
+  await draw(scene('distinct',{categories:365,draws:23}));
+  assert(texts.some(t=>t.includes('49.27%')) && texts.some(t=>t.includes('50.73%')), 'show both calculated probabilities');
+  assert(texts.some(t=>t.includes('独立')&&t.includes('等概率')), 'show the probability assumptions');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');
   console.log('Network, scattering, growth and beat-bound event checks passed.');

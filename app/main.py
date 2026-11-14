@@ -468,8 +468,10 @@ def start_render(pid: str, body: RenderRequest):
     issues = director.visual_issues(plan)
     if issues:
         raise HTTPException(400, "；".join(issues) + "。请使用 AI 优化对应镜头或选择其他视觉类型，再生成视频。")
-    if body.engine == "light" and any(s["visual"] in {"divergence", "lorenz", "amplify", "contrast", "growth"} for s in plan["scenes"]):
-        raise HTTPException(400, "部分镜头使用了浏览器专属动效，请选择浏览器渲染器。")
+    light_visuals = {"question", "dots", "network", "formula", "compare", "flow", "ending", "distinct"}
+    unsupported = [str(i + 1) for i, scene in enumerate(plan["scenes"]) if scene["visual"] not in light_visuals]
+    if body.engine == "light" and unsupported:
+        raise HTTPException(400, "轻量渲染暂不支持镜头 " + "、".join(unsupported) + " 的动效，请选择浏览器渲染器或修改这些镜头。")
     if not body.generate_media and any((s.get("spec", {}).get("media") or {}).get("kind") in {"image", "video"} and not (s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
         message = "部分镜头原本计划使用 AI 素材，但此次未开启素材生成，已使用程序动画。"
         if message not in plan.setdefault("warnings", []): plan["warnings"].append(message)

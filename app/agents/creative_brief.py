@@ -18,6 +18,7 @@ RENDERER_CONTRACT = """可用画面组件与必需参数（只能使用这些已
 点阵和关系网络可选 animation.node_motions：每个节点最多一条移动，例如 {"node":1,"start":0.2,"end":0.8,"from_x":0,"from_y":0,"to_x":60,"to_y":-30,"easing":"smooth","beat_binding":false}。node 从0开始且小于明确填写的 count，start/end 为镜头时间比例且 end 大于 start，各偏移量为 -90 至 90 的画面单位。连线跟随对应节点；运动会限制在安全画面内。非法或重复节点会使镜头无法渲染，不要复制 node_motions_invalid 标记。这是直线插值，不是任意轨迹。
 - formula：按 × 和 = 分段显示 parameters.formula 的纯文本；不支持 LaTeX 排版和任意公式变形。
 - compare：parameters.value 为0到100的真实百分数，secondary_value 为另一个百分数，labels 为两端短标签。图形是一根进度条，不是饼图或翻牌。
+- distinct：独立、等概率、允许重复的类别抽取，逐次计算全部不同及至少一次重复的概率；parameters.categories 为类别数（2至1000000整数），parameters.draws 为抽取次数（1至60整数，且不超过类别数加一）。只在这些假设适用时使用，不要把示意假设当作已核实事实。
 - bars/curve：spec.elements 是非负数数组 [{"label":"标签","value":数值}]，最多8项；bars至少1项，curve至少2项。不知道数据不能编造，也不要使用这两种图。
 - flow/timeline：parameters.labels 是2至5个简短节点，沿直线依次出现；不支持复杂结构图或不同轨迹。
 - geometry：parameters.sides为3至8的多边形；不支持变形或其他几何对象。

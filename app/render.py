@@ -2,7 +2,6 @@
 import asyncio
 import math
 import os
-import re
 import shutil
 import subprocess
 from functools import lru_cache
@@ -11,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from .services import speech
 from .providers.siliconflow import ProviderError
+from .scene_spec import distinct_probability
 
 W, H, FPS = 960, 540, 12
 GOLD = (219, 185, 120)
@@ -52,6 +52,32 @@ def split_text(value, width=27):
     return lines
 
 
+def network_geometry(scene, t, duration):
+    spec = scene.get("spec") or {}
+    params, animation, layout = spec.get("parameters") or {}, spec.get("animation") or {}, spec.get("layout") or {}
+    count = params.get("count") or 8
+    points = []
+    for i in range(count):
+        angle, radius = i * math.tau / count - math.pi / 2, 110 + (i % 3) * 10
+        points.append([layout.get("graphic_x", 650) + math.cos(angle) * radius,
+                       layout.get("graphic_y", 255) + math.sin(angle) * radius])
+    for motion in animation.get("node_motions", []):
+        node = motion["node"]
+        if node >= len(points): continue
+        start, end = motion["start"] * duration, motion["end"] * duration
+        p = max(0, min(1, (t - start) / max(.001, end - start)))
+        if motion.get("easing") != "linear": p = 1 - (1 - p) ** 3
+        dx = motion["from_x"] + (motion["to_x"] - motion["from_x"]) * p
+        dy = motion["from_y"] + (motion["to_y"] - motion["from_y"]) * p
+        points[node] = [max(50, min(910, points[node][0] + dx)), max(130, min(420, points[node][1] + dy))]
+    keyframes = animation.get("keyframes") or [0, .65]
+    raw = max(0, min(1, (t / max(duration, .001) - keyframes[0]) / max(.01, keyframes[1] - keyframes[0])))
+    motion = animation.get("motion")
+    p = raw if motion == "linear" else math.floor(raw * 4) / 4 if motion == "step" else 1 - (1 - raw) ** 3
+    edges = params.get("edges") or [[i, j] for i in range(count) for j in range(i + 1, count)]
+    return {"points": points, "edges": edges, "shown": math.floor(p * len(edges)), "visible": max(1, math.ceil(p * count))}
+
+
 def frame(scene, index, count, t, duration):
     im = Image.new("RGB", (W, H), (11, 11, 12))
     d = ImageDraw.Draw(im)
@@ -68,39 +94,71 @@ def frame(scene, index, count, t, duration):
     progress = min(1.0, max(0.0, t / max(1, duration * .6)))
     visual = scene["visual"]
     if visual in ("dots", "network"):
-        pts = [(620 + math.cos(2 * math.pi * i / 23) * (75 + (i % 3) * 20), 247 + math.sin(2 * math.pi * i / 23) * (75 + (i % 3) * 20)) for i in range(23)]
-        n = max(1, int(progress * 23))
+        graph = network_geometry(scene, t, duration)
+        pts = graph["points"]
         if visual == "network":
-            for j in range(1, n):
-                d.line((*pts[0], *pts[j]), fill=(91, 77, 51), width=1)
-        for j, (x, y) in enumerate(pts[:n]):
-            r = 5 if j == 0 else 3
+            for a, b in graph["edges"][:graph["shown"]]:
+                d.line((*pts[a], *pts[b]), fill=(91, 77, 51), width=1)
+        visible = len(pts) if visual == "network" else graph["visible"]
+        for x, y in pts[:visible]:
+            r = 3
             d.ellipse((x-r, y-r, x+r, y+r), fill=GOLD)
-        text_fit(d, (130, 198), scene["key"], 76, GOLD, 350)
+        text_fit(d, (95, 190), scene["key"], 60, GOLD, 380)
+        text_fit(d, (95, 266), scene["detail"], 19, MUTED, 395)
+        if visual == "network" and (scene.get("spec", {}).get("parameters") or {}).get("count"):
+            d.text((95, 303), f"连线 {graph['shown']} / {len(graph['edges'])}", font=font(18), fill=GOLD)
     elif visual == "compare":
         text_fit(d, (140, 185), scene["key"], 76, GOLD, 680)
+        params = (scene.get("spec") or {}).get("parameters") or {}
+        value = params.get("value")
         d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=(60, 55, 45))
-        match = re.search(r"(\d+(?:\.\d+)?)\s*%", scene["key"])
-        ratio = min(float(match.group(1)) / 100, 1) if match else 1
+        ratio = value / 100 if value is not None else 0
         d.rounded_rectangle((145, 310, 145 + max(1, int(675 * progress * ratio)), 325), radius=7, fill=GOLD)
+        if value is not None: text_fit(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
     elif visual == "formula":
         text_fit(d, (92, 175), scene["detail"], 32, WHITE, 780)
         d.line((95, 253, 95 + int(700 * progress), 253), fill=GOLD, width=2)
         text_fit(d, (95, 285), scene["key"], 57, GOLD, 730)
+    elif visual == "distinct":
+        params = (scene.get("spec") or {}).get("parameters") or {}
+        categories, draws = params.get("categories"), params.get("draws")
+        if not categories or not draws or draws > categories + 1:
+            text_fit(d, (100, 220), "请填写有效的类别数和抽取次数", 24, WHITE, 760)
+        else:
+            step = min(draws, max(1, int(progress * draws) + 1))
+            prob, prior = distinct_probability(categories, step), distinct_probability(categories, step - 1)
+            text_fit(d, (100, 137), f"类别 {categories} · 抽取 {draws} 次", 18, MUTED, 370)
+            text_fit(d, (100, 181), f"前 {step-1} 次均不同 × 第 {step} 次仍不同", 16, WHITE, 370)
+            text_fit(d, (100, 215), f"{prior*100:.2f}% × {max(0,categories-step+1)} / {categories}", 27, GOLD, 370)
+            text_fit(d, (100, 275), f"全部不同 ≈ {prob*100:.2f}%", 24, GOLD, 370)
+            text_fit(d, (100, 315), f"至少一次重复 ≈ {(1-prob)*100:.2f}%", 19, WHITE, 370)
+            d.line((540, 175, 540, 335, 840, 335), fill=(112, 98, 70), width=1)
+            points = [(540 + 300 * (i-1) / max(1, draws-1), 335 - distinct_probability(categories, i) * 160) for i in range(1, step+1)]
+            if len(points) > 1: d.line(points, fill=GOLD, width=3)
+            x, y = points[-1]; d.ellipse((x-4, y-4, x+4, y+4), fill=GOLD)
+            text_fit(d, (100, 395), "独立、等概率抽取（允许重复）；忽略其他条件", 13, MUTED, 760)
     elif visual == "flow":
-        for i in range(3):
-            x = 220 + i * 245
-            color = GOLD if progress > i / 4 else (72, 65, 52)
-            d.ellipse((x-28, 220, x+28, 276), outline=color, width=2)
-            d.text((x, 248), f"0{i+1}", font=font(19), fill=color, anchor="mm")
-            if i < 2:
-                d.line((x+29, 248, x+216, 248), fill=(95, 80, 52), width=2)
-        text_fit(d, (480, 320), scene["key"], 46, GOLD, 700, "mm")
+        params = (scene.get("spec") or {}).get("parameters") or {}
+        labels = (params.get("labels") or ["01", "02", "03"])[:5]
+        left, right, y = 170, 790, 255
+        d.line((left, y, left + (right-left) * progress, y), fill=(142, 120, 77), width=2)
+        for i, label in enumerate(labels):
+            x = left + (right-left) * i / max(1, len(labels)-1)
+            if progress >= i / max(1, len(labels)-1):
+                d.ellipse((x-7, y-7, x+7, y+7), fill=GOLD)
+                text_fit(d, (x, 305), label, 17, WHITE, 125, "mm")
+        text_fit(d, (480, 180), scene["key"], 43, GOLD, 700, "mm")
+    elif visual == "question":
+        params = (scene.get("spec") or {}).get("parameters") or {}
+        candidates = params.get("candidates") or []
+        shown = candidates[min(len(candidates)-1, int(progress*len(candidates)))] if candidates else scene["key"]
+        text_fit(d, (480, 242), shown, 70, GOLD, 800, "mm")
+        d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
     else:
         size = int(65 + 8 * progress)
         text_fit(d, (480, 242), scene["key"], size, GOLD, 800, "mm")
         d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
-    if visual != "formula":
+    if visual not in {"formula", "distinct", "dots", "network"}:
         text_fit(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
     # Sentence-level subtitle timing uses the actual scene duration.
     lines = split_text(scene["narration"])

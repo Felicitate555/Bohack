@@ -145,6 +145,11 @@ def visual_issues(plan):
             issues.append(f"镜头 {i} 的比例图缺少百分比")
         if scene["visual"] == "growth" and any(spec.get("parameters", {}).get(k) is None for k in ("principal", "rate", "periods")):
             issues.append(f"镜头 {i} 的复利动画需要有效本金、每期增长率和整数期数")
+        if scene["visual"] == "distinct":
+            params = spec.get("parameters", {})
+            categories, draws = params.get("categories"), params.get("draws")
+            if categories is None or draws is None or draws > categories + 1:
+                issues.append(f"镜头 {i} 的不重复概率需要有效类别数和抽取次数（最多类别数加一）")
         if scene["visual"] == "network" and spec.get("parameters", {}).get("edges_invalid"):
             issues.append(f"镜头 {i} 的关系网络含无效节点或连线")
         if scene["visual"] in {"network", "dots"} and spec.get("animation", {}).get("node_motions_invalid"):

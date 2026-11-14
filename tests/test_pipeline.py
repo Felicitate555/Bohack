@@ -14,10 +14,85 @@ from PIL import Image
 from app import director
 from app.providers import siliconflow
 from app.services import media_assets
-from app import browser_render, main, audio, render
+from app import browser_render, main, audio, render, scene_spec
 
 
 class PipelineTests(unittest.TestCase):
+    def test_distinct_probability_requires_valid_assumptions(self):
+        scene = {'heading':'不重复概率', 'narration':'逐次抽取', 'key':'概率', 'visual':'distinct',
+                 'spec':{'parameters':{'categories':365,'draws':23}}}
+        plan = director.validate({'scenes':[scene]})
+        self.assertEqual(plan['scenes'][0]['visual'], 'distinct')
+        self.assertEqual(plan['scenes'][0]['spec']['parameters']['categories'], 365)
+        self.assertEqual(plan['scenes'][0]['spec']['parameters']['draws'], 23)
+        self.assertFalse(director.visual_issues(director.validate(plan)))
+        for categories, draws in ((None,23),(365,0),(365,2.5),(2,4),(-1,3),(365,True)):
+            scene['spec']['parameters']={'categories':categories,'draws':draws}
+            self.assertTrue(director.visual_issues(director.validate({'scenes':[scene]})))
+        self.assertAlmostEqual(scene_spec.distinct_probability(365, 23), .4927027657, places=9)
+        self.assertEqual(scene_spec.distinct_probability(2, 3), 0)
+
+    def test_offline_example_explains_probability_in_light_renderer(self):
+        plan = director.validate(director.example())
+        scene = next(s for s in plan['scenes'] if s['visual'] == 'distinct')
+        self.assertEqual((scene['spec']['parameters']['categories'], scene['spec']['parameters']['draws']), (365, 23))
+        with patch.object(render, 'text_fit', wraps=render.text_fit) as drawn:
+            render.frame(scene, 0, 1, 4, 4)
+        values = [str(c.args[2]) for c in drawn.call_args_list]
+        self.assertTrue(any('49.27%' in value for value in values))
+        self.assertTrue(any('50.73%' in value for value in values))
+
+    def test_light_network_uses_validated_nodes_edges_and_motion(self):
+        item = {'heading':'节点','narration':'关系','key':'网络','visual':'network',
+                'spec':{'parameters':{'count':3,'edges':[[0,1],[1,2]]},
+                        'animation':{'node_motions':[{'node':1,'start':0,'end':1,'from_x':0,'from_y':0,'to_x':60,'to_y':-30,'easing':'linear'}]}}}
+        scene = director.validate({'scenes':[item]})['scenes'][0]
+        before = render.network_geometry(scene, 0, 4)
+        after = render.network_geometry(scene, 4, 4)
+        self.assertEqual(len(before['points']), 3)
+        self.assertEqual(after['edges'], [[0,1],[1,2]])
+        self.assertEqual(after['shown'], 2)
+        self.assertAlmostEqual(after['points'][1][0] - before['points'][1][0], 60)
+        self.assertAlmostEqual(after['points'][1][1] - before['points'][1][1], -30)
+        item['spec'] = {'parameters': {'count':23}}
+        complete = render.network_geometry(director.validate({'scenes':[item]})['scenes'][0], 4, 4)
+        self.assertEqual(complete['shown'], 253)
+
+    def test_light_renderer_uses_declared_flow_and_comparison_data(self):
+        item = {'heading':'流程','narration':'说明','key':'流程','visual':'flow',
+                'spec':{'parameters':{'labels':['输入','处理','输出','反馈']}}}
+        scene = director.validate({'scenes':[item]})['scenes'][0]
+        with patch.object(render, 'text_fit', wraps=render.text_fit) as drawn:
+            render.frame(scene, 0, 1, 4, 4)
+        values = [str(c.args[2]) for c in drawn.call_args_list]
+        self.assertTrue(all(label in values for label in ('输入','处理','输出','反馈')))
+        item.update(visual='compare', key='比例')
+        item['spec']={'parameters':{'value':37,'secondary_value':63,'labels':['A','B']}}
+        scene = director.validate({'scenes':[item]})['scenes'][0]
+        with patch.object(render, 'text_fit', wraps=render.text_fit) as drawn:
+            render.frame(scene, 0, 1, 4, 4)
+        values = [str(c.args[2]) for c in drawn.call_args_list]
+        self.assertTrue(any('37%' in value for value in values))
+
+    def test_light_renderer_refuses_unsupported_visuals(self):
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
+            plan = main.create(main.Create(example=True))
+            plan['scenes'][0]['visual'] = 'scattering'
+            main.save(plan['id'], plan)
+            with self.assertRaises(main.HTTPException) as error:
+                main.start_render(plan['id'], main.RenderRequest(engine='light'))
+            self.assertEqual(error.exception.status_code, 400)
+            self.assertIn('浏览器', error.exception.detail)
+
+    def test_offline_example_can_start_light_render(self):
+        class ImmediateThread:
+            def __init__(self, target, **kwargs): self.target = target
+            def start(self): self.target()
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(render, 'render', return_value=8):
+            plan = main.create(main.Create(example=True))
+            main.start_render(plan['id'], main.RenderRequest(engine='light'))
+            self.assertEqual(main.read_project(plan['id'])['job']['status'], 'done')
+
     def test_node_motion_is_validated_and_round_trips(self):
         motion = {'node': 1, 'start': .2, 'end': .8, 'from_x': 0, 'from_y': 0,
                   'to_x': 60, 'to_y': -30, 'easing': 'linear', 'beat_binding': True}
