@@ -43,6 +43,12 @@ def build(raw, scenes):
                     beat['actual'] = f'答案与旁白、字幕在 {pause:g} 秒后同时出现；请核对标题是否提前泄露。'
                 else:
                     beat['actual'] += f' 旁白和字幕延后 {pause:g} 秒。'
+            if execution == 'delayed_reveal' and item.get('sound_effect') == 'soft_reveal':
+                scene['spec']['animation']['sound_effect'] = 'soft_reveal'
+                beat['sound_effect'] = 'soft_reveal'
+                beat['actual'] += ' 已启用本地合成的轻微揭晓音效。'
+            elif item.get('sound_effect') not in (None, '', 'none'):
+                beat['actual'] += ' 请求的音效不受支持，未应用。'
             occupied.add(index)
         result['beats'].append(beat)
     if not result['beats']:

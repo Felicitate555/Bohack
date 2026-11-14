@@ -12,7 +12,7 @@ from pathlib import Path
 from .render import run, stamp, caption_timeline, scene_narration_delay, RenderCancelled
 from .services import speech
 from .providers.siliconflow import ProviderError
-from . import style_profile
+from . import style_profile, sound_effects
 
 
 def browser_path():
@@ -40,13 +40,15 @@ def music_mix_filter(duration, volume, voice, voice_input="0:a", music_input="1:
             "[voice][ducked]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
 
 
-def mux_audio(base, output, voices, durations, music, music_volume, delays=None):
+def mux_audio(base, output, voices, durations, music, music_volume, delays=None, effects=None):
     """Encode narration once after joining sample-aligned per-scene audio."""
     command = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(base)]
     for voice in voices:
         command += ["-i", str(voice)]
     if music:
         command += ["-i", str(music)]
+    if effects:
+        command += ["-i", str(effects)]
     filters = []
     for i, duration in enumerate(durations if voices else []):
         delay = round((delays[i] if delays else 0) * 1000)
@@ -55,9 +57,16 @@ def mux_audio(base, output, voices, durations, music, music_volume, delays=None)
         filters.append("".join(f"[v{i}]" for i in range(len(voices))) + f"concat=n={len(voices)}:v=0:a=1[narr]")
     total = sum(durations)
     if music:
-        filters.append(music_mix_filter(total, music_volume, bool(voices), "narr", f"{len(voices)+1}:a"))
+        filters.append(music_mix_filter(total, music_volume, bool(voices), "narr", f"{len(voices)+1}:a").replace("[a]", "[premix]"))
+    elif voices:
+        filters.append("[narr]anull[premix]")
     else:
-        filters.append("[narr]anull[a]")
+        filters.append(f"anullsrc=r=44100:cl=stereo,atrim=duration={total}[premix]")
+    if effects:
+        effect_input = len(voices) + (1 if music else 0) + 1
+        filters.append(f"[premix][{effect_input}:a]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
+    else:
+        filters.append("[premix]anull[a]")
     command += ["-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[a]", "-t", str(total), "-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart", str(output)]
     run(command)
 
@@ -83,7 +92,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     renderer_fingerprint = hashlib.sha256(scene_html.encode("utf-8")).hexdigest()
     outdir.mkdir(parents=True, exist_ok=True)
     scenes = project["scenes"]
-    clips, captions, durations, elapsed = [], [], [], 0.0
+    clips, captions, durations, effect_times, elapsed = [], [], [], [], 0.0
     previous_dir = outdir.parent / previous_run if previous_run and len(previous_run) == 12 and all(c in '0123456789abcdef' for c in previous_run) else None
     old_manifest = {}
     if previous_dir:
@@ -160,9 +169,12 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 duration = frames / fps
                 local_beats = [b-elapsed for b in beats if elapsed <= b < elapsed+duration]
                 local_strong = [b-elapsed for b in strong_beats if elapsed <= b < elapsed+duration]
+                effect_time = sound_effects.frame_reveal_time(scene, duration, local_beats, fps, 'browser') if scene['spec']['animation'].get('sound_effect') == 'soft_reveal' else None
+                effect_times.append(effect_time)
                 speech_duration = min(duration - delays[i], voice_durations[i]) if voice else duration - delays[i]
                 scene["spec"]["timing"] = {"start": round(elapsed, 3), "end": round(elapsed+duration, 3), "speech_duration": round(speech_duration, 3), "narration_delay": delays[i]}
                 if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
+                if effect_time is not None: scene["spec"]["timing"]["sound_effect_time"] = effect_time
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
                 hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed,narration_mode], "cues":voice_cues[i] if voice else None}
@@ -229,8 +241,9 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     base = outdir / "combined.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(outdir / "concat.txt"), "-c", "copy", str(base)])
     output = outdir / "video.mp4"
-    if voice or music:
-        mux_audio(base, output, [outdir / f"voice_{i}.mp3" for i in range(len(scenes))] if voice else [], durations, music, music_volume, delays)
+    effects = sound_effects.write_track(scenes, durations, outdir / "effects.wav", effect_times)
+    if voice or music or effects:
+        mux_audio(base, output, [outdir / f"voice_{i}.mp3" for i in range(len(scenes))] if voice else [], durations, music, music_volume, delays, effects)
     else:
         base.replace(output)
     check_cancel()

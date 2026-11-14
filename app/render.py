@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .services import speech
 from .providers.siliconflow import ProviderError
 from .scene_spec import distinct_probability
-from . import style_profile
+from . import style_profile, sound_effects
 
 W, H, FPS = 960, 540, 12
 GOLD = (219, 185, 120)
@@ -274,6 +274,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
     minimums = [max(3.0, voice_durations[i] + .6 + delays[i]) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8) + delays[i]) for i, s in enumerate(scenes)]
     extension = max(0, (target_seconds or 0) - sum(minimums)) / len(scenes)
     clips, captions, elapsed = [], [], 0.0
+    has_effects = any((s.get("spec", {}).get("animation") or {}).get("sound_effect") == "soft_reveal" for s in scenes)
     for i, scene in enumerate(scenes):
         update(f"正在制作镜头 {i+1}/{len(scenes)}：{scene['heading']}")
         audio = outdir / f"voice_{i}.mp3"
@@ -285,8 +286,25 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
         clip = outdir / f"scene_{i}.mp4"
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "pipe:0"]
+        effect_time = sound_effects.frame_reveal_time(scene, duration, [], FPS, 'light') if (scene.get("spec", {}).get("animation") or {}).get("sound_effect") == "soft_reveal" else None
+        if effect_time is not None: scene["spec"]["timing"]["sound_effect_time"] = effect_time
+        effect = sound_effects.write_track([scene], [duration], outdir / f"effect_{i}.wav", [effect_time]) if has_effects else None
         if voice:
-            cmd += ["-i", str(audio), "-af", f"adelay={round(delays[i]*1000)}:all=1,apad", "-c:a", "aac", "-b:a", "96k"]
+            cmd += ["-i", str(audio)]
+        if effect:
+            cmd += ["-i", str(effect)]
+        elif has_effects and not voice:
+            cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono"]
+        if voice and effect:
+            cmd += ["-filter_complex", f"[1:a]adelay={round(delays[i]*1000)}:all=1,apad[v];[v][2:a]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]", "-map", "0:v", "-map", "[a]"]
+        elif voice:
+            cmd += ["-af", f"adelay={round(delays[i]*1000)}:all=1,apad"]
+        elif has_effects:
+            cmd += ["-af", "apad"]
+        if voice or has_effects:
+            cmd += ["-c:a", "aac", "-b:a", "96k"]
+            if has_effects:
+                cmd += ["-ar", "44100", "-ac", "1"]
         cmd += ["-t", str(duration), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p", str(clip)]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
@@ -301,6 +319,9 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             proc.kill()
             proc.wait()
             raise
+        finally:
+            if proc.stderr:
+                proc.stderr.close()
         clips.append(clip)
         for part, a, b in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None, delays[i]):
             a, b = elapsed + a, elapsed + b
