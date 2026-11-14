@@ -5,6 +5,9 @@ import threading
 import uuid
 import copy
 import subprocess
+import tempfile
+
+from starlette.concurrency import run_in_threadpool
 from urllib.parse import unquote
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import director, render, browser_render, audio, style_profile
+from . import director, render, browser_render, audio, style_profile, style_library
 from .providers import model_registry, siliconflow
 from .services import media_assets, speech
 from .agents import visual_reviewer, animation_builder
@@ -130,6 +133,40 @@ def check_model_connection():
         raise HTTPException(400, "连接失败，请检查网络、密钥和服务地址。") from exc
 
 
+@app.get("/api/styles")
+def styles():
+    return style_library.list_profiles(DATA)
+
+
+@app.post("/api/styles")
+def save_style(body: dict):
+    try:
+        return style_library.save(DATA, body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/styles/analyze")
+async def analyze_style(request: Request):
+    # A private temporary file is removed even on invalid media or interrupted upload.
+    DATA.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="reference_", dir=DATA) as folder:
+        path = Path(folder) / "reference.mp4"
+        size = 0
+        with path.open("wb") as output:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 150 * 1024 * 1024:
+                    raise HTTPException(413, "参考视频不能超过 150 MB。")
+                output.write(chunk)
+        if not size:
+            raise HTTPException(400, "请选择参考 MP4。")
+        try:
+            return await run_in_threadpool(style_library.analyze_reference, path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/projects")
 def projects():
     results = []
@@ -149,7 +186,7 @@ def create(body: Create):
     if body.creative_mode not in model_registry.MODES:
         raise HTTPException(400, "请选择有效的创作模式。")
     if body.example:
-        plan, usage, mode = director.validate(director.example()), {}, "example"
+        plan, usage, mode = director.validate({**director.example(), "style_profile": body.style_profile}), {}, "example"
     else:
         topic = body.topic.strip()
         if not topic:

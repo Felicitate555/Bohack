@@ -18,6 +18,31 @@ from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_local_style_library_keeps_profiles_and_rejects_bad_ids(self):
+        from app import style_library
+        with tempfile.TemporaryDirectory(dir='data') as root:
+            root = Path(root)
+            profile = style_library.save(root, {'name':'海洋', 'palette':{'accent':'#123456'}})
+            self.assertEqual(style_library.get(root, profile['id'])['palette']['accent'], '#123456')
+            self.assertEqual(len(style_library.list_profiles(root)), 2)
+            self.assertEqual(style_library.get(root, 'black-gold-documentary')['name'], '黑金知识纪录片')
+            with self.assertRaises(ValueError): style_library.get(root, '../private')
+            with self.assertRaises(ValueError): style_library.save(root, {'name':' '})
+
+    def test_reference_analysis_extracts_measurable_features_without_sending_media(self):
+        from app import style_library
+        import numpy as np
+        frames = np.zeros((4, 90, 160, 3), dtype=np.uint8)
+        frames[:,:,:,0] = 30
+        frames[:,20:50,20:80] = (170,120,30)
+        result = style_library.summarize_frames(frames)
+        self.assertEqual(result['frame_count'], 4)
+        self.assertEqual(result['motion_intensity'], 0)
+        self.assertTrue(result['colors'])
+        profile = style_library.profile_from_analysis(result)
+        self.assertNotEqual(profile['palette']['background'], '#08090b')
+        self.assertIn('本地', result['limitations'])
+
     def test_sentence_speech_uses_measured_lengths_and_bounds_calls(self):
         import numpy as np
         calls = []
@@ -90,6 +115,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(custom['palette']['background'], '#102030')
         self.assertEqual(style_profile.normalize({'palette':{'accent':'not-a-color'}})['palette']['accent'], style_profile.DEFAULT['palette']['accent'])
         with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
+            example = main.create(main.Create(example=True, style_profile=custom))
+            self.assertEqual(example['scenes'][0]['spec']['style']['accent'], '#ff4400')
             plan = main.create(main.Create(example=True))
             plan['preview_job'] = {'status':'done', 'index':0, 'id':'a'*12}
             main.save(plan['id'], plan)
