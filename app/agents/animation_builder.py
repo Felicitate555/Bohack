@@ -35,6 +35,7 @@ def improve(scene, instruction, profile=None, emotion_beats=None):
 def improve_plan(topic, scenes, profile=None, emotion_plan=None):
     system = PRODUCTION_PRINCIPLES + "\n" + RENDERER_CONTRACT + """
 你是全片动态图形导演。收到已经完成的场景列表后，在已有组件范围内提高逐镜解释力和整片画面变化。保持镜头数量和顺序，不要改动标题、旁白、已有准确结论或捏造数值；画面参数必须与口播的实际含义一致。
+逐镜检查主体、参数、信息揭示顺序和旁白之间是否对应；检查相邻镜头是否反复出现相同的大字、横线或装饰框。只有能解释当前内容的组件才可使用，不为追求变化牺牲语义。key 与 detail 是观众能读懂的实际画面文字，不能写内部变量名、设计术语或模型自我说明。动画设计必须落到组件实际支持的 parameters、animation 和布局，未实现的动作不能靠 action 描述冒充。
 让相邻镜头尽可能使用不同但合适的表达，关键过程使用图形逐步建立，关键数字选择可解释其含义的画面，不要所有镜头都变成大字或流程线。能用素材作为背景增强真实氛围时可选择 image/video 并提供英文 prompt；公式和精确图表优先使用 animation。单个组件无法实现的复杂动作不可伪装成已实现。
 只输出 JSON 对象 {"scenes":[完整镜头对象,...]}；每一项必须包含 heading、narration、key、detail、visual 和 spec，不包含代码。"""
     system += "\n" + style_profile.director_context(profile)

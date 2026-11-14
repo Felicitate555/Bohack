@@ -18,6 +18,12 @@ from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_detailed_creative_brief_survives_request_and_scene_validation(self):
+        brief = '创作要求：' + '详细说明。' * 300 + '最后必须保留的结尾要求'
+        self.assertEqual(main.Create(topic=brief).topic, brief)
+        scene = {'heading': '标题', 'narration': '讲解。', 'visual': 'question'}
+        self.assertEqual(director.validate({'topic': brief, 'scenes': [scene]})['topic'], brief)
+
     def test_scene_layout_frame_survives_validation_and_legacy_defaults(self):
         scene={'heading':'标题','narration':'讲解。','key':'要点','visual':'question','spec':{'layout':{'frame':'cinematic'}}}
         result=director.validate({'scenes':[scene]})['scenes'][0]
@@ -563,7 +569,7 @@ class PipelineTests(unittest.TestCase):
         def save(pid, plan):
             original_save(pid, plan)
             if (plan.get('planning_job') or {}).get('status') == 'done': finished.set()
-        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main, 'save', side_effect=save), patch.object(director, 'generate', side_effect=generate):
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main, 'save', side_effect=save), patch.object(director, 'generate', side_effect=generate), patch.object(main.code_video, 'check_available'):
             task = main.start_planning(main.Create(topic='测试'))
             self.assertTrue(started.wait(2))
             state = main.read_project(task['id'])['planning_job']
@@ -664,7 +670,7 @@ class PipelineTests(unittest.TestCase):
             partial = director.validate(director.example())
             checkpoint(partial, [{'role': 'director'}])
             raise ValueError('动画规划中断')
-        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(director, 'generate', side_effect=generator):
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(director, 'generate', side_effect=generator), patch.object(main.code_video, 'check_available'):
             task = main.start_planning(main.Create(topic='测试', creative_mode='director'))
             saved = main.read_project(task['id'])
             self.assertEqual(saved['planning_job']['status'], 'error')

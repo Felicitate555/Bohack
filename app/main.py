@@ -18,9 +18,9 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import director, render, browser_render, audio, style_profile, style_library
+from . import director, render, browser_render, code_render, audio, style_profile, style_library
 from .providers import model_registry, siliconflow
-from .services import media_assets, speech
+from .services import media_assets, speech, code_video
 from .agents import visual_reviewer, animation_builder
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,11 +43,21 @@ planning_active = set()
 
 
 class Create(BaseModel):
-    topic: str = Field(default="", max_length=500)
+    topic: str = Field(default="", max_length=12000)
     example: bool = False
     target_seconds: int | None = None
     creative_mode: str = "smart"
     style_profile: dict | None = None
+    auto_render: dict | None = None
+
+
+def uses_code(plan):
+    """Keep older component projects intact while routing new projects explicitly."""
+    return plan.get('render_pipeline') == 'code' or plan.get('creative_mode') == 'code'
+
+
+def planning_mode(mode, pipeline):
+    return ('code_smart' if mode == 'smart' else 'code') if pipeline == 'code' else mode
 
 
 class RenderRequest(BaseModel):
@@ -204,6 +214,10 @@ def create(body: Create):
         raise HTTPException(400, "请选择可用的视频时长。")
     if body.creative_mode not in model_registry.MODES:
         raise HTTPException(400, "请选择有效的创作模式。")
+    pipeline = 'components' if body.example or body.creative_mode == 'fast' else 'code'
+    if pipeline == 'code':
+        try: code_video.check_available()
+        except RuntimeError as exc: raise HTTPException(400, str(exc)) from exc
     if body.example:
         plan, usage, mode = director.validate({**director.example(), "style_profile": body.style_profile}), {}, "example"
     else:
@@ -211,12 +225,12 @@ def create(body: Create):
         if not topic:
             raise HTTPException(400, "先输入一个想制作的主题。")
         try:
-            plan, usage = director.generate(topic, body.target_seconds, body.creative_mode, profile=body.style_profile)
+            plan, usage = director.generate(topic, body.target_seconds, planning_mode(body.creative_mode, pipeline), profile=body.style_profile)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         mode = "ai"
     pid = str(uuid.uuid4())
-    plan.update({"id": pid, "mode": mode, "creative_mode": body.creative_mode, "usage": usage, "usage_events": usage if isinstance(usage, list) else [], "job": None, "target_seconds": body.target_seconds, "style_profile": style_profile.normalize(body.style_profile)})
+    plan.update({"id": pid, "mode": mode, "creative_mode": "smart" if body.example else body.creative_mode, "render_pipeline": pipeline, "usage": usage, "usage_events": usage if isinstance(usage, list) else [], "job": None, "target_seconds": body.target_seconds, "style_profile": style_profile.normalize(body.style_profile)})
     save(pid, plan)
     return plan
 
@@ -227,20 +241,31 @@ def start_planning(body: Create):
         raise HTTPException(400, "离线示例请直接创建。")
     if body.target_seconds not in (None, 30, 60, 90, 120) or body.creative_mode not in model_registry.MODES:
         raise HTTPException(400, "请选择可用的创作模式和时长。")
+    pipeline = 'components' if body.creative_mode == 'fast' else 'code'
+    if pipeline == 'code':
+        try: code_video.check_available()
+        except RuntimeError as exc: raise HTTPException(400, str(exc)) from exc
     topic = body.topic.strip()
     if not topic:
         raise HTTPException(400, "先输入一个想制作的主题。")
     if not model_registry.api_key() and not (os.getenv("LLM_API_KEY", "").strip() and os.getenv("LLM_MODEL", "").strip()):
         raise HTTPException(400, "请先在 .env 中配置 SILICONFLOW_API_KEY，或选择零密钥示例。")
+    try:
+        auto_render = RenderRequest(**body.auto_render).dict() if body.auto_render is not None else None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, '自动生成设置无效。') from exc
+    if pipeline == 'code' and auto_render and auto_render['generate_media']:
+        raise HTTPException(400, '专属代码画面暂不支持生成图片或视频素材，请先关闭素材生成。')
     pid = str(uuid.uuid4())
-    plan = {"id": pid, "title": topic[:80], "topic": topic, "scenes": [], "mode": "ai", "creative_mode": body.creative_mode,
+    plan = {"id": pid, "title": topic[:80], "topic": topic, "scenes": [], "mode": "ai", "creative_mode": body.creative_mode, "render_pipeline": pipeline,
             "target_seconds": body.target_seconds, "job": None, "usage_events": [], "style_profile": style_profile.normalize(body.style_profile),
-            "planning_job": {"status": "running", "message": "正在准备创作"}}
+            "planning_job": {"status": "running", "message": "正在准备创作"}, "auto_render": auto_render}
     return launch_planning(pid, plan)
 
 
 def launch_planning(pid, plan):
-    topic, seconds, mode = plan["topic"], plan.get("target_seconds"), plan.get("creative_mode", "smart")
+    topic, seconds = plan["topic"], plan.get("target_seconds")
+    mode = planning_mode(plan.get("creative_mode", "smart"), 'code' if uses_code(plan) else 'components')
     old_events = copy.deepcopy(plan.get("usage_events") or [])
     with planning_lock:
         if pid in planning_active:
@@ -280,6 +305,13 @@ def launch_planning(pid, plan):
                 finally:
                     with planning_lock:
                         planning_active.discard(pid)
+            if plan['planning_job']['status'] == 'done' and plan.get('auto_render') is not None:
+                try:
+                    start_render(pid, RenderRequest(**plan['auto_render']))
+                except Exception as exc:
+                    latest = read_project(pid)
+                    latest.setdefault('warnings', []).append('自动生成未能启动：' + (str(getattr(exc, 'detail', exc))[:300]))
+                    save(pid, latest)
         threading.Thread(target=work, daemon=True).start()
     except Exception:
         with planning_lock:
@@ -360,10 +392,14 @@ def improve_scene(pid: str, index: int, body: SceneEdit):
     if (plan.get("job") or {}).get("status") == "running" or (plan.get("preview_job") or {}).get("status") == "running":
         raise HTTPException(409, "渲染中无法修改镜头。")
     try:
-        emotion = plan.get("emotion_plan") or {}
-        beats = [b for b in emotion.get("beats", []) if isinstance(b, dict) and b.get("scene_index") == index] if emotion.get("status") == "generated" else []
-        revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"), emotion_beats=beats)
-        revised = animation_builder.preserve_audio_controls(scene, revised)
+        if uses_code(plan):
+            brief, usage = code_video.improve_brief(plan.get('topic', ''), scene, body.instruction, profile=plan.get('style_profile'))
+            revised = {**scene, 'visual_brief': brief}
+        else:
+            emotion = plan.get("emotion_plan") or {}
+            beats = [b for b in emotion.get("beats", []) if isinstance(b, dict) and b.get("scene_index") == index] if emotion.get("status") == "generated" else []
+            revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"), emotion_beats=beats)
+            revised = animation_builder.preserve_audio_controls(scene, revised)
         validated = director.validate({"title": plan["title"], "topic": plan["topic"], "scenes": [revised], "style_profile": plan.get("style_profile")})["scenes"][0]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -384,11 +420,15 @@ def preview_scene(pid: str, index: int):
     plan = read_project(pid)
     get_scene(plan, index)
     scene = director.validate(plan)["scenes"][index]
-    issues = director.visual_issues({"scenes": [scene]})
+    code_mode = uses_code(plan)
+    issues = [] if code_mode else director.visual_issues({"scenes": [scene]})
     if issues:
         raise HTTPException(400, "；".join(issues) + "。请修改相应参数或选择其他视觉类型。")
     plan["scenes"][index] = scene
-    if not browser_render.available():
+    if code_mode:
+        try: code_video.check_available()
+        except RuntimeError as exc: raise HTTPException(400, str(exc)) from exc
+    if not code_mode and not browser_render.available():
         raise HTTPException(400, "镜头预览需要 Playwright 和 Chromium。")
     if not render_lock.acquire(blocking=False):
         raise HTTPException(409, "已有任务运行，请稍后再试。")
@@ -399,8 +439,14 @@ def preview_scene(pid: str, index: int):
             plan["preview_job"]["message"] = message
             save(pid, plan)
         try:
-            single = {"scenes": [copy.deepcopy(scene)], "target_seconds": None, "style_profile": plan.get("style_profile")}
-            duration = browser_render.render(single, project_dir(pid) / ("preview_" + preview_id), False, update)
+            single = {"scenes": [copy.deepcopy(scene)], "topic": plan.get('topic', ''), "target_seconds": None, "style_profile": plan.get("style_profile")}
+            if code_mode:
+                def report_preview(event):
+                    plan.setdefault('usage_events', []).append(event)
+                    save(pid, plan)
+                duration = code_render.render_video(single, project_dir(pid) / ("preview_" + preview_id), False, update, report=report_preview)
+            else:
+                duration = browser_render.render(single, project_dir(pid) / ("preview_" + preview_id), False, update)
             preview_warnings = []
             for warning in single.get("warnings", []):
                 warning = warning.replace("镜头 1 ", f"镜头 {index+1} ", 1)
@@ -469,7 +515,7 @@ def update_project(pid: str, body: dict):
     job = old.get("job")
     if job and job.get("status") == "done":
         job["stale"] = True
-    plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
+    plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "render_pipeline": old.get("render_pipeline", "code" if old.get("creative_mode") == "code" else "components"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
     if isinstance(old.get("emotion_plan"), dict):
         plan["emotion_plan"] = copy.deepcopy(old["emotion_plan"])
     plan["style_profile"] = style_profile.normalize(body.get("style_profile", old.get("style_profile")))
@@ -550,6 +596,7 @@ def get_music(pid: str):
 @app.post("/api/projects/{pid}/render")
 def start_render(pid: str, body: RenderRequest):
     plan = read_project(pid)
+    code_mode = uses_code(plan)
     if (plan.get("planning_job") or {}).get("status") == "running":
         raise HTTPException(409, "分镜规划中，请等待完成后生成视频。")
     if body.engine not in {"browser", "light"} or body.quality not in {"preview", "full"}:
@@ -560,23 +607,28 @@ def start_render(pid: str, body: RenderRequest):
         raise HTTPException(400, "不支持该字幕对齐方式。")
     if body.voice and body.voice_provider != "edge" and not model_registry.api_key():
         raise HTTPException(400, "硅基流动配音需要配置 API Key。")
+    if code_mode and body.generate_media:
+        raise HTTPException(400, '自由动画模式暂不支持生成图片或视频素材，请关闭素材生成。')
     if body.generate_media and body.engine == "light":
         raise HTTPException(400, "AI 素材合成需要浏览器渲染器。")
-    if body.engine == "light" and plan.get("music"):
+    if not code_mode and body.engine == "light" and plan.get("music"):
         raise HTTPException(400, "音乐驱动需要浏览器渲染器；轻量渲染不支持音乐。")
-    if body.engine == "browser" and not browser_render.available():
+    if code_mode:
+        try: code_video.check_available()
+        except RuntimeError as exc: raise HTTPException(400, str(exc)) from exc
+    if not code_mode and body.engine == "browser" and not browser_render.available():
         raise HTTPException(400, "浏览器渲染器不可用：请用 Docker 启动，或在本机安装 Playwright 和 Chromium。")
     # Bring older projects forward without modifying their stored text.
     validated = director.validate(plan)
     plan["scenes"] = validated["scenes"]
-    issues = director.visual_issues(plan)
+    issues = [] if code_mode else director.visual_issues(plan)
     if issues:
         raise HTTPException(400, "；".join(issues) + "。请使用 AI 优化对应镜头或选择其他视觉类型，再生成视频。")
     if body.voice and body.narration_mode == "sentence" and sum(len(speech.sentence_chunks(s["narration"])) for s in plan["scenes"]) > 32:
         raise HTTPException(400, "逐句配音最多 32 段，请缩短口播或选择整镜配音。")
     light_visuals = {"binary_search", "question", "dots", "network", "formula", "compare", "flow", "ending", "distinct"}
     unsupported = [str(i + 1) for i, scene in enumerate(plan["scenes"]) if scene["visual"] not in light_visuals]
-    if body.engine == "light" and unsupported:
+    if not code_mode and body.engine == "light" and unsupported:
         raise HTTPException(400, "轻量渲染暂不支持镜头 " + "、".join(unsupported) + " 的动效，请选择浏览器渲染器或修改这些镜头。")
     run_warnings = []
     if not body.generate_media and any((s.get("spec", {}).get("media") or {}).get("kind") in {"image", "video"} and not (s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
@@ -618,7 +670,12 @@ def start_render(pid: str, body: RenderRequest):
             if body.generate_media:
                 media_assets.prepare(work_plan, project_dir(pid), update, persist)
             check_cancel()
-            if body.engine == "browser":
+            if code_mode:
+                music = project_dir(pid) / 'music.bin' if plan.get('music') else None
+                duration = code_render.render_video(work_plan, project_dir(pid) / run_id, body.voice, update,
+                    body.quality, music, (plan.get('music') or {}).get('analysis'), body.music_volume,
+                    body.voice_provider, body.voice_name, body.voice_speed, report, narration_mode=body.narration_mode)
+            elif body.engine == "browser":
                 music = project_dir(pid) / "music.bin" if plan.get("music") else None
                 duration = browser_render.render(work_plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run, narration_mode=body.narration_mode)
             else:

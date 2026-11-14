@@ -13,7 +13,7 @@ ROLES = {
     "speech": ("SF_MODEL_SPEECH", "FunAudioLLM/CosyVoice2-0.5B", "speech"),
     "speech_alt": ("SF_MODEL_SPEECH_ALT", "fnlp/MOSS-TTSD-v0.5", "speech"),
 }
-MODES = {"fast": "极速创作", "smart": "智能创作", "director": "导演级"}
+MODES = {"fast": "极速创作", "smart": "智能创作", "director": "导演级", "code": "AI 自由动画"}
 
 
 def model(role):

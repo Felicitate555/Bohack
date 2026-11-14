@@ -14,6 +14,12 @@ from . import style_profile
 ROOT = Path(__file__).resolve().parent.parent
 VISUALS = TYPES
 
+FREE_DIRECTOR_INSTRUCTIONS = """你是短片编剧和视觉导演，为普通观众设计由程序绘制的专属动态图形短片。
+根据用户主题、脚本和明确约束规划叙事；如用户提供脚本，保留关键内容和逻辑，不编造事实或数据。
+为每镜写自然中文口播和详细 visual_brief：主体与构图、信息随时间建立的顺序、图形如何解释口播、与相邻镜头的视觉联系。每镜只承担清楚的叙事任务；避免整片反复使用标题卡。不要只写抽象形容词，按主题设计画面，但不要预设已有组件。音乐和参考视频未提供实际分析结果时不得声称已看见或听到。
+根据主题与受众自然安排好奇、期待、解释和知识回报；用画面与口播的先后制造节奏，不能为制造悬念而扭曲事实或提早泄露答案。字幕由系统叠加，画面设计须为字幕留出安全区域。
+只输出 JSON：{\"title\":\"标题\",\"scenes\":[{\"heading\":\"短标题\",\"narration\":\"口播\",\"key\":\"重点\",\"detail\":\"补充\",\"visual_brief\":\"详细画面与动作设计\"}]}。4至12个镜头，最多16个；每镜口播最多260字。"""
+
 
 def example():
     return json.loads((ROOT / "examples" / "birthday.json").read_text(encoding="utf-8"))
@@ -24,7 +30,8 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
     legacy_model = os.getenv("LLM_MODEL", "").strip()
     if not siliconflow.api_key() and not (legacy_key and legacy_model):
         raise ValueError("请先在 .env 中配置 SILICONFLOW_API_KEY，或选择零密钥示例。")
-    system = DIRECTOR_INSTRUCTIONS + "\n" + style_profile.director_context(profile)
+    free_mode = mode in {'code', 'code_smart'}
+    system = (FREE_DIRECTOR_INSTRUCTIONS if free_mode else DIRECTOR_INSTRUCTIONS) + "\n" + style_profile.director_context(profile)
     if target_seconds:
         system += f"\n用户选择的目标成片约 {target_seconds} 秒。写与该时长相称的有效口播，不要通过重复或空话凑时长。"
         if target_seconds >= 90:
@@ -34,6 +41,8 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
     try:
         records = []
         if not siliconflow.api_key():
+            if free_mode:
+                raise ValueError('AI 自由动画模式需要配置硅基流动密钥。')
             response = requests.post(os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions", headers={"Authorization":"Bearer " + legacy_key}, json={"model":legacy_model,"messages":[{"role":"system","content":system},{"role":"user","content":topic}]}, timeout=90)
             if not response.ok:
                 raise ValueError(f"原模型接口返回 HTTP {response.status_code}，请检查配置。")
@@ -60,10 +69,10 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
                 records.append(event)
                 checkpoint({"title": str(script.get("title") or topic)[:80], "scenes": [], "knowledge_script": script}, records)
             source = "主题：" + topic + "\n编剧草稿（对不确定内容继续标注）：" + json.dumps(script, ensure_ascii=False)[:16000]
-        role = "director_pro" if mode == "director" else ("writer" if mode == "fast" else "director")
+        role = "director_pro" if mode in {"director", "code"} else ("writer" if mode == "fast" else "director")
         progress("正在规划分镜与视觉表达" if mode != "director" else "旗舰导演正在规划分镜与视觉表达")
         try:
-            raw, event = siliconflow.chat(role, [{"role": "system", "content": system}, {"role": "user", "content": source}], max_tokens=12000 if mode == "director" else 6000)
+            raw, event = siliconflow.chat(role, [{"role": "system", "content": system}, {"role": "user", "content": source}], max_tokens=12000 if mode in {"director", "code"} else 6000)
         except ValueError as exc:
             label = "旗舰导演" if mode == "director" else "视觉导演"
             raise ValueError(f"{label}阶段失败：{exc}") from exc
@@ -75,6 +84,12 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             result = validate(obj)
         except ValueError as exc:
             raise ValueError(f"{'旗舰导演' if mode == 'director' else '视觉导演'}返回的分镜不可用：{exc}") from exc
+        if free_mode:
+            if any(not scene.get('visual_brief') for scene in result['scenes']):
+                raise ValueError('自由动画分镜缺少画面设计，请重试。')
+            result['knowledge_script'] = script
+            result['warnings'] = []
+            return result, records
         issues = visual_issues(result)
         if issues:
             progress("正在修正无法绘制的镜头")
@@ -131,7 +146,7 @@ def validate(obj):
     if not isinstance(obj, dict) or not isinstance(obj.get("scenes"), list) or not 1 <= len(obj["scenes"]) <= 16:
         raise ValueError("分镜应为 1 至 16 个镜头。")
     title = str(obj.get("title", "未命名作品"))[:80]
-    topic = str(obj.get("topic", ""))[:500]
+    topic = str(obj.get("topic", ""))[:12000]
     profile = style_profile.normalize(obj.get("style_profile"))
     palette = profile["palette"]
     scenes = []
@@ -139,6 +154,8 @@ def validate(obj):
         if not isinstance(s, dict):
             raise ValueError("分镜格式错误。")
         scene = {k: str(s.get(k, "")).strip()[:limit] for k, limit in {"heading": 40, "narration": 260, "key": 24, "detail": 80}.items()}
+        if isinstance(s.get("visual_brief"), str):
+            scene["visual_brief"] = s["visual_brief"].strip()[:1800]
         if not scene["heading"] or not scene["narration"]:
             raise ValueError("每个镜头都需要标题和旁白。")
         # Internal labels such as q_world or amplify should never become the
