@@ -732,6 +732,18 @@ class PipelineTests(unittest.TestCase):
             proc.kill.assert_called_once()
             self.assertFalse((root/('b'*12)/'video.mp4').exists())
 
+    def test_preview_declares_estimated_timing_and_no_narration_or_music(self):
+        class ImmediateThread:
+            def __init__(self,target,**kwargs):self.target=target
+            def start(self):self.target()
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.object(main,'DATA',Path(folder)),patch.object(main.threading,'Thread',ImmediateThread),patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'render',return_value=4):
+            plan=main.create(main.Create(example=True));main.preview_scene(plan['id'],0)
+            job=main.read_project(plan['id'])['preview_job']
+            self.assertEqual(job['timing_mode'],'estimated')
+            self.assertFalse(job['narration'])
+            self.assertFalse(job['music'])
+            self.assertIn('估算',job['message'])
+
     def test_preview_without_generated_asset_identifies_fallback(self):
         from app import browser_render
         scene=director.validate(director.example())['scenes'][0]

@@ -406,8 +406,9 @@ def preview_scene(pid: str, index: int):
                 warning = warning.replace("镜头 1 ", f"镜头 {index+1} ", 1)
                 preview_warnings.append(warning)
                 if warning not in plan.setdefault("warnings", []): plan["warnings"].append(warning)
-            message = "镜头预览已完成；素材存在回退，请查看提示。" if preview_warnings else "镜头预览已完成"
-            plan["preview_job"].update({"status": "done", "duration": duration, "message": message, "warnings": preview_warnings})
+            message = "镜头预览已完成：无旁白和背景音乐，时间按文字估算；正式成片节奏可能不同。"
+            if preview_warnings: message += "素材存在回退，请查看提示。"
+            plan["preview_job"].update({"status": "done", "duration": duration, "message": message, "warnings": preview_warnings, "timing_mode": "estimated", "narration": False, "music": False})
         except Exception as exc:
             plan["preview_job"].update({"status": "error", "message": str(exc)[:400]})
         finally:
