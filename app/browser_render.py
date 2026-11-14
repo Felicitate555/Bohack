@@ -178,7 +178,6 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
                 hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed,narration_mode], "cues":voice_cues[i] if voice else None}
-                fingerprint = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
                 old = old_scenes[i] if i < len(old_scenes) else {}
                 prior_clip = previous_dir / f"scene_{i}.mp4" if previous_dir else None
                 media = scene["spec"].get("media") or {}
@@ -187,8 +186,10 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 cacheable = not source or source.is_file()
                 media_loaded = False
                 if source and source.is_file():
+                    content = source.read_bytes()
+                    hash_input["media_sha256"] = hashlib.sha256(content).hexdigest()
                     mime = "video/mp4" if kind == "video" else "image/png"
-                    payload = "data:" + mime + ";base64," + base64.b64encode(source.read_bytes()).decode("ascii")
+                    payload = "data:" + mime + ";base64," + base64.b64encode(content).decode("ascii")
                     try:
                         page.evaluate("a => window.loadMedia(a[0],a[1])", [kind, payload])
                         media_loaded = True
@@ -197,7 +198,11 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                         project.setdefault("warnings", []).append(f"镜头 {i+1} 素材加载失败，已回退程序动画。")
                         page.evaluate("() => window.loadMedia('', '')")
                 else:
+                    if source and not source.is_file():
+                        warning = f"镜头 {i+1} 素材文件不存在，已回退程序动画；请重置素材后重新生成。"
+                        if warning not in project.setdefault("warnings", []): project["warnings"].append(warning)
                     page.evaluate("() => window.loadMedia('', '')")
+                fingerprint = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
                 clip = outdir / f"scene_{i}.mp4"
                 cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(fps), "-vcodec", "mjpeg", "-i", "pipe:0"]
                 cmd += ["-t", str(duration), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(clip)]

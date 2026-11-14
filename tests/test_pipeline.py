@@ -713,6 +713,38 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('模型权限', str(exc.exception))
         self.assertIn('trace_123', str(exc.exception))
 
+    def test_missing_local_asset_warns_and_is_not_cached(self):
+        plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
+        plan['scenes'][0]['spec']['media'].update(kind='image',asset_id='a'*32)
+        page=MagicMock();page.screenshot.return_value=b'frame'
+        browser=MagicMock();browser.new_page.return_value=page
+        context=MagicMock();context.__enter__.return_value.chromium.launch.return_value=browser
+        module=types.ModuleType('playwright.sync_api');module.sync_playwright=lambda:context
+        def encoder(cmd,**kwargs):
+            Path(cmd[-1]).write_bytes(b'clip');proc=MagicMock();proc.stderr.read.return_value=b'';proc.wait.return_value=0;return proc
+        def mux(cmd,**kwargs):Path(cmd[-1]).write_bytes(b'video')
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.dict(sys.modules,{'playwright.sync_api':module}), patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'browser_path',return_value='chromium'),patch.object(browser_render.subprocess,'Popen',side_effect=encoder),patch.object(browser_render,'run',side_effect=mux):
+            out=Path(root)/('b'*12);browser_render.render(plan,out,False,lambda _:None)
+            self.assertTrue(any('素材文件' in w and '镜头 1' in w for w in plan.get('warnings',[])))
+            manifest=json.loads((out/'manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['scenes'][0]['fingerprint'],'')
+
+    def test_changed_local_asset_invalidates_cached_scene(self):
+        plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
+        plan['scenes'][0]['spec']['media'].update(kind='image',asset_id='a'*32)
+        page=MagicMock();page.screenshot.return_value=b'frame';browser=MagicMock();browser.new_page.return_value=page
+        context=MagicMock();context.__enter__.return_value.chromium.launch.return_value=browser
+        module=types.ModuleType('playwright.sync_api');module.sync_playwright=lambda:context
+        def encoder(cmd,**kwargs):
+            Path(cmd[-1]).write_bytes(b'clip');proc=MagicMock();proc.stderr.read.return_value=b'';proc.wait.return_value=0;return proc
+        def mux(cmd,**kwargs):Path(cmd[-1]).write_bytes(b'video')
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.dict(sys.modules,{'playwright.sync_api':module}),patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'browser_path',return_value='chromium'),patch.object(browser_render.subprocess,'Popen',side_effect=encoder) as encoder_call,patch.object(browser_render,'run',side_effect=mux):
+            root=Path(folder);(root/'assets').mkdir();asset=root/'assets'/('a'*32+'.png');asset.write_bytes(b'first')
+            browser_render.render(plan,root/('b'*12),False,lambda _:None)
+            asset.write_bytes(b'second')
+            browser_render.render(plan,root/('c'*12),False,lambda _:None,previous_run='b'*12)
+            self.assertEqual(encoder_call.call_count,2)
+
     def test_unchanged_scene_reuses_rendered_clip(self):
         plan = director.validate(director.example())
         plan['scenes'] = plan['scenes'][:1]
