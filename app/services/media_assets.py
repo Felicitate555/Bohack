@@ -5,6 +5,7 @@ from PIL import Image
 from ..providers import siliconflow
 from ..providers.model_registry import model
 from .. import style_profile
+from ..render import RenderCancelled
 
 
 def prepare(plan, directory, update, persist):
@@ -86,8 +87,13 @@ def prepare(plan, directory, update, persist):
             if kind == "video": media["request_id"] = ""
             if event: event["status"] = "complete"
             persist()
+        except RenderCancelled:
+            target.unlink(missing_ok=True)
+            Path(str(target) + ".converted").unlink(missing_ok=True)
+            raise
         except (siliconflow.ProviderError, OSError, ValueError) as exc:
             target.unlink(missing_ok=True)
+            Path(str(target) + ".converted").unlink(missing_ok=True)
             if event: event["status"] = "failed_or_pending"
             plan.setdefault("warnings", []).append(f"镜头 {idx+1} 素材未完成，使用程序化动画：{exc}")
             persist()

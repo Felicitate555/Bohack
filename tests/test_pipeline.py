@@ -666,6 +666,23 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(events), 2)
         self.assertIn('不要编造数据', chat.call_args_list[1].args[1][-1]['content'])
 
+    def test_cancel_after_image_download_cleans_only_new_file_and_retains_uncertain_state(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            root=Path(folder);scene={'spec':{'media':{'kind':'image','prompt':'sky','asset_id':'','request_id':'','submission_state':''}}}
+            plan={'scenes':[scene]};cancelled=[False]
+            def update(_):pass
+            def check():
+                if cancelled[0]:raise render.RenderCancelled()
+            update.check_cancel=check
+            def download(url,path,*args):Path(path).write_bytes(b'new image');cancelled[0]=True
+            (root/'assets').mkdir();existing=root/'assets'/'existing.png';existing.write_bytes(b'preserve')
+            with patch.object(siliconflow,'image',return_value='mock-url'),patch.object(siliconflow,'download',side_effect=download):
+                with self.assertRaises(render.RenderCancelled):media_assets.prepare(plan,root,update,lambda:None)
+            self.assertEqual(existing.read_bytes(),b'preserve')
+            self.assertEqual([p.name for p in (root/'assets').iterdir()],['existing.png'])
+            self.assertEqual(scene['spec']['media']['submission_state'],'uncertain')
+            self.assertEqual(scene['spec']['media']['asset_id'],'')
+
     def test_cancel_after_video_submit_preserves_request_id_and_skips_poll(self):
         with tempfile.TemporaryDirectory(dir='data') as folder:
             scene={'spec':{'media':{'kind':'video','prompt':'sky','asset_id':'','request_id':'','submission_state':''}}}
