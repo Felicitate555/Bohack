@@ -109,6 +109,12 @@ def frame(scene, index, count, t, duration, profile=None):
     d.line((margin, 54, W-margin, 54), fill=MUTED, width=1)
     styled_text(d, (margin, 77), scene["heading"], typography["title_size"], WHITE, W-margin*2)
     progress = min(1.0, max(0.0, t / max(1, duration * .6)))
+    animation = (scene.get("spec") or {}).get("animation") or {}
+    keyframes = animation.get("keyframes") or [0, .65]
+    if keyframes != [0, .65]:
+        raw = max(0.0, min(1.0, (t / max(duration, .001) - keyframes[0]) / max(.01, keyframes[1] - keyframes[0])))
+        motion = animation.get("motion")
+        progress = raw if motion == "linear" else math.floor(raw * 4) / 4 if motion == "step" else 1 - (1 - raw) ** 3
     visual = scene["visual"]
     if visual in ("dots", "network"):
         graph = network_geometry(scene, t, duration)

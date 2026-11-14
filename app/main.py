@@ -240,6 +240,8 @@ def launch_planning(pid, plan):
                 plan["usage_events"] = old_events + copy.deepcopy(events)
                 if "knowledge_script" in partial:
                     plan["knowledge_script"] = copy.deepcopy(partial["knowledge_script"])
+                if "emotion_plan" in partial:
+                    plan["emotion_plan"] = copy.deepcopy(partial["emotion_plan"])
                 plan["planning_job"]["message"] = "基础分镜已保存，继续优化中" if partial["scenes"] else "编剧草稿已保存，继续规划分镜"
                 save(pid, plan)
             try:
@@ -418,6 +420,11 @@ def update_project(pid: str, body: dict):
     if job and job.get("status") == "done":
         job["stale"] = True
     plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
+    if isinstance(old.get("emotion_plan"), dict):
+        plan["emotion_plan"] = copy.deepcopy(old["emotion_plan"])
+        if director.validate(old)["scenes"] != plan["scenes"]:
+            plan["emotion_plan"]["status"] = "stale"
+            plan["emotion_plan"]["message"] = "分镜已修改，原情绪规划可能不再对应，请重新核对。"
     plan["style_profile"] = style_profile.normalize(body.get("style_profile", old.get("style_profile")))
     if style_profile.normalize(old.get("style_profile")) != plan["style_profile"] and any((s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
         notice = "风格已更改，已有素材仍沿用原文件；如需新风格，请在对应镜头主动重置素材后重新生成。"

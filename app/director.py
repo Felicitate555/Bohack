@@ -6,7 +6,7 @@ from pathlib import Path
 import requests
 from .scene_spec import scene_spec, resolve_visual, TYPES
 from .providers import siliconflow
-from .agents import knowledge_writer, animation_builder
+from .agents import knowledge_writer, animation_builder, emotion_director
 from .agents.creative_brief import DIRECTOR_INSTRUCTIONS
 from .services import media_router
 from . import style_profile
@@ -42,6 +42,8 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             obj["topic"] = topic
             obj["style_profile"] = profile
             result = validate(obj)
+            result["emotion_plan"] = emotion_director.build(obj.get("emotion_plan"), result["scenes"])
+            result["warnings"] = [result["emotion_plan"]["message"]] if result["emotion_plan"]["status"] == "fallback" else []
             return result, [{"role":"legacy", "model":legacy_model, "usage":body.get("usage", {})}]
         if mode == "fast":
             source = topic
@@ -92,6 +94,10 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             if issues:
                 raise ValueError("生成方案仍无法绘制：" + "；".join(issues) + "。请重试或更换模型。")
         warnings = []
+        emotion_raw = obj.get("emotion_plan")
+        result["emotion_plan"] = emotion_director.build(emotion_raw, result["scenes"])
+        if result["emotion_plan"]["status"] == "fallback":
+            warnings.append(result["emotion_plan"]["message"])
         checkpoint(result, records)
         if mode == "director":
             try:
@@ -104,6 +110,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
                 for old, new in zip(result["scenes"], candidate["scenes"]):
                     new["heading"], new["narration"] = old["heading"], old["narration"]
                 result["scenes"] = candidate["scenes"]
+                result["emotion_plan"] = emotion_director.build(emotion_raw, result["scenes"])
             except (ValueError, TypeError, KeyError) as exc:
                 warnings.append(f"动画导演优化未完成，已保留旗舰导演分镜：{exc}")
         for scene in result["scenes"]:
