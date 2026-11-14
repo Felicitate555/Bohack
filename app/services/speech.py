@@ -76,6 +76,7 @@ def read_cues(path, narration, duration=None):
 
 def create_segmented(scenes, outdir, provider, voice, speed, update, report, indices=None, cache_dir=None, instruction=None):
     """Synthesize short phrases and record decoded durations for captions."""
+    check_cancel = getattr(update, 'check_cancel', lambda: None)
     all_chunks = [sentence_chunks(s['narration']) for s in scenes]
     if sum(map(len, all_chunks)) > 32:
         raise ValueError('逐句配音最多 32 段，请缩短口播或选择整镜配音。')
@@ -114,6 +115,7 @@ def create_segmented(scenes, outdir, provider, voice, speed, update, report, ind
                         temp.replace(cached)
                     finally:
                         temp.unlink(missing_ok=True)
+            check_cancel()
             cues.append({'text':text, 'start':round(elapsed, 4), 'end':round(elapsed + length, 4)})
             elapsed += length + (.15 if j < len(chunks)-1 else 0)
             paths.append(path)
@@ -125,8 +127,10 @@ def create_segmented(scenes, outdir, provider, voice, speed, update, report, ind
             filters.append(f'[{j}:a]aresample=24000,aformat=sample_fmts=fltp:channel_layouts=mono,apad,atrim=duration={length},asetpts=PTS-STARTPTS[s{j}]')
         filters.append(''.join(f'[s{j}]' for j in range(len(cues))) + f'concat=n={len(cues)}:v=0:a=1[a]')
         cmd += ['-filter_complex',';'.join(filters),'-map','[a]','-c:a','libmp3lame','-b:a','128k',str(outdir/f'voice_{i}.mp3')]
+        check_cancel()
         try: subprocess.run(cmd, check=True, capture_output=True, timeout=90)
         except (OSError, subprocess.SubprocessError) as exc: raise ValueError('逐句配音合成失败，请检查 FFmpeg。') from exc
+        check_cancel()
         (outdir/f'voice_{i}.cues.json').write_text(json.dumps(cues,ensure_ascii=False),encoding='utf-8')
 
 

@@ -53,6 +53,23 @@ class PipelineTests(unittest.TestCase):
         self.assertNotEqual(profile['palette']['background'], '#08090b')
         self.assertIn('本地', result['limitations'])
 
+    def test_cancel_after_last_speech_request_keeps_cache_and_skips_concat(self):
+        import numpy as np
+        cancelled=[False]
+        def update(_):pass
+        def check():
+            if cancelled[0]:raise render.RenderCancelled()
+        update.check_cancel=check
+        def fake_create(scenes,outdir,*args,**kwargs):
+            with wave.open(str(outdir/'voice_0.mp3'),'wb') as f:
+                f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000);f.writeframes(np.zeros(8000,dtype='<i2').tobytes())
+            cancelled[0]=True
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.object(speech,'create',side_effect=fake_create):
+            root=Path(folder);out=root/'run';out.mkdir();cache=root/'cache'
+            with self.assertRaises(render.RenderCancelled):speech.create_segmented([{'narration':'一句。'}],out,'edge','anna',1,update,lambda _:None,cache_dir=cache)
+            self.assertEqual(len(list(cache.glob('*.mp3'))),1)
+            self.assertFalse((out/'voice_0.mp3').exists())
+
     def test_sentence_speech_uses_measured_lengths_and_bounds_calls(self):
         import numpy as np
         calls = []
