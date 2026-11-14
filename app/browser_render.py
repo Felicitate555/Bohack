@@ -220,11 +220,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                             except Exception as exc:
                                 if not media_loaded:
                                     raise RuntimeError(f"镜头 {i+1} 的程序动画绘制失败，请检查场景数据和渲染环境。") from exc
-                                cacheable = False
-                                project.setdefault("warnings", []).append(f"镜头 {i+1} 素材定位失败，已回退程序动画。")
-                                page.evaluate("() => window.loadMedia('', '')")
-                                media_loaded = False
-                                page.evaluate("a => window.renderFrame(...a)", args)
+                                raise RuntimeError(f"镜头 {i+1} 素材定位失败，已停止本次渲染；请检查素材或重置后重试。") from exc
                             proc.stdin.write(page.screenshot(type="jpeg", quality=90, animations="disabled"))
                         proc.stdin.close()
                         err = proc.stderr.read()

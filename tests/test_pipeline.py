@@ -713,6 +713,25 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('模型权限', str(exc.exception))
         self.assertIn('trace_123', str(exc.exception))
 
+    def test_media_seek_failure_stops_render_instead_of_mixing_two_visuals(self):
+        plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
+        plan['scenes'][0]['spec']['media'].update(kind='video',asset_id='a'*32)
+        page=MagicMock();page.screenshot.return_value=b'frame';calls=[]
+        def evaluate(script,*args):
+            if 'window.renderFrame' in script:
+                calls.append(1)
+                if len(calls)==2:raise RuntimeError('seek failed')
+        page.evaluate.side_effect=evaluate;browser=MagicMock();browser.new_page.return_value=page
+        context=MagicMock();context.__enter__.return_value.chromium.launch.return_value=browser
+        module=types.ModuleType('playwright.sync_api');module.sync_playwright=lambda:context
+        proc=MagicMock();proc.stderr.read.return_value=b'';proc.wait.return_value=0
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.dict(sys.modules,{'playwright.sync_api':module}),patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'browser_path',return_value='chromium'),patch.object(browser_render.subprocess,'Popen',return_value=proc):
+            root=Path(folder);(root/'assets').mkdir();(root/'assets'/('a'*32+'.mp4')).write_bytes(b'video')
+            with self.assertRaisesRegex(RuntimeError,'素材定位失败'):
+                browser_render.render(plan,root/('b'*12),False,lambda _:None)
+            proc.kill.assert_called_once()
+            self.assertFalse((root/('b'*12)/'video.mp4').exists())
+
     def test_missing_local_asset_warns_and_is_not_cached(self):
         plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
         plan['scenes'][0]['spec']['media'].update(kind='image',asset_id='a'*32)
