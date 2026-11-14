@@ -59,6 +59,8 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   let equalSum=scene('compare',{value:50,secondary_value:50,labels:['A','B']});await draw(equalSum);
   assert(texts.filter(t=>t==='50%').length===2, 'two values totaling 100 are not automatically complements');
   equalSum.spec.parameters.compare_mode='complement';await draw(equalSum);assert(texts.some(t=>t.includes('1 −')), 'explicit complement may show complement formula');
+  let rounded=scene('compare',{value:50.7,secondary_value:49.2,compare_mode:'complement'});await draw(rounded);
+  assert(!texts.some(t=>t.includes('1 −')&&t.includes('=')), 'rounded values that do not sum exactly must not be shown as an exact equation');
   const birthday=sandbox.distinctProbability(365,23);
   assert(Math.abs(birthday-.4927027657)<.0000001, '23 uniform independent draws should produce the correct distinct probability');
   assert.equal(sandbox.distinctProbability(2,3),0, 'more draws than categories must produce a collision');
