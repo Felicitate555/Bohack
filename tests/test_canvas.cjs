@@ -53,6 +53,12 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   assert(sandbox.videoSeekTarget(1,0.04)<.04, 'single-frame video must stay within media duration');
   assert.equal(sandbox.needsLightMediaBackdrop('#f0e0c0'),true, 'light background needs protective reading area');
   assert.equal(sandbox.needsLightMediaBackdrop('#08090b'),false, 'default dark style keeps existing layout');
+  let independent=scene('compare',{value:30,secondary_value:60,labels:['A','B']});await draw(independent);
+  assert(texts.includes('30%')&&texts.includes('60%'), 'independent percentages must each be labeled');
+  assert(!texts.some(t=>t.includes('1 −')), 'independent percentages must not imply a complement');
+  let equalSum=scene('compare',{value:50,secondary_value:50,labels:['A','B']});await draw(equalSum);
+  assert(texts.filter(t=>t==='50%').length===2, 'two values totaling 100 are not automatically complements');
+  equalSum.spec.parameters.compare_mode='complement';await draw(equalSum);assert(texts.some(t=>t.includes('1 −')), 'explicit complement may show complement formula');
   const birthday=sandbox.distinctProbability(365,23);
   assert(Math.abs(birthday-.4927027657)<.0000001, '23 uniform independent draws should produce the correct distinct probability');
   assert.equal(sandbox.distinctProbability(2,3),0, 'more draws than categories must produce a collision');

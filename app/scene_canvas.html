@@ -73,8 +73,11 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
    text(label,480,355,25,gold,'center',820);text('已排除的区间逐步变暗',480,400,16,muted,'center',820);
   }
  }else if(type==='compare'){
-  const value=params.value,secondary=params.secondary_value;
-  text(s.key,100,220,67,gold);if(value!==null&&value!==undefined){let totalWidth=730;x.fillStyle=rgba(gold,.18);x.fillRect(110,288,totalWidth,22);x.fillStyle=gold;x.fillRect(110,288,totalWidth*value/100*p,22);text((params.labels||[])[0]||'',110,347,18,muted);text((params.labels||[])[1]||'',840,347,18,muted,'right');if(secondary!==null&&secondary!==undefined)text(Math.abs(value+secondary-100)<.15?`1 − ${secondary}% = ${value}%`:`${secondary}%   /   ${value}%`,840,260,26,warm,'right')}else text('请填写比例数值',110,310,20,muted);
+  const value=params.value,other=params.secondary_value,secondaryColor=secondary;
+  let labels=params.labels||[],independent=other!==null&&other!==undefined&&(params.compare_mode!=='complement'||Math.abs(value+other-100)>=.15);
+  if(value===null||value===undefined){text('请填写比例数值',110,310,20,muted)}else if(independent){
+   text(s.key,100,155,38,warm,'left',760);for(let [j,v,color] of [[0,value,gold],[1,other,secondaryColor]]){let y=215+j*100;text(labels[j]||`第 ${j+1} 组`,110,y-12,18,warm);text(`${v}%`,840,y-12,22,color,'right');x.fillStyle=rgba(gold,.18);x.fillRect(110,y+10,730,16);x.fillStyle=color;x.fillRect(110,y+10,730*v/100*p,16)}
+  }else{let totalWidth=730;text(s.key,100,220,67,gold);x.fillStyle=rgba(gold,.18);x.fillRect(110,288,totalWidth,22);x.fillStyle=gold;x.fillRect(110,288,totalWidth*value/100*p,22);text(labels[0]||'',110,347,18,muted);text(labels[1]||'',840,347,18,muted,'right');if(other!==null&&other!==undefined)text(`1 − ${other}% = ${value}%`,840,260,26,warm,'right')}
  }else if(type==='formula'){
   let parts=String(params.formula||s.detail||'').split(/([×=])/).filter(Boolean);let n=Math.max(1,Math.ceil(parts.length*p));text(parts.slice(0,n).join(' '),100,225,33,warm,'left',760);x.fillStyle=gold;x.fillRect(100,265,720*p,2);text(s.key,100,340,58,gold,'left',700);
  }else if(type==='distinct'){

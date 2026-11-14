@@ -155,13 +155,27 @@ def frame(scene, index, count, t, duration, profile=None):
             styled_text(d,(480,355),label,25,GOLD,820,"mm")
             styled_text(d,(480,400),"已排除的区间逐步变暗",16,MUTED,820,"mm")
     elif visual == "compare":
-        styled_text(d, (140, 185), scene["key"], 76, GOLD, 680)
         params = (scene.get("spec") or {}).get("parameters") or {}
-        value = params.get("value")
-        d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=tint(.22))
-        ratio = value / 100 if value is not None else 0
-        d.rounded_rectangle((145, 310, 145 + max(1, int(675 * progress * ratio)), 325), radius=7, fill=GOLD)
-        if value is not None: styled_text(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
+        value, other = params.get("value"), params.get("secondary_value")
+        labels = params.get("labels") or []
+        if value is None:
+            styled_text(d, (145, 270), "请填写比例数值", 20, WHITE, 700)
+        elif other is not None and (params.get("compare_mode") != "complement" or abs(value+other-100) >= .15):
+            styled_text(d, (100, 145), scene["key"], 38, WHITE, 760)
+            for j,(v,color) in enumerate(((value,GOLD),(other,rgb(palette["secondary"])))):
+                y=240+j*100
+                styled_text(d,(110,y-30),labels[j] if j<len(labels) else f"第 {j+1} 组",18,WHITE,480)
+                styled_text(d,(840,y-30),f"{v:g}%",22,color,200,"ra")
+                d.rounded_rectangle((110,y,840,y+16),radius=7,fill=tint(.22))
+                if v: d.rounded_rectangle((110,y,110+730*v/100*progress,y+16),radius=7,fill=color)
+        else:
+            styled_text(d, (140, 185), scene["key"], 76, GOLD, 680)
+            d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=tint(.22))
+            if value: d.rounded_rectangle((145, 310, 145 + 675 * progress * value / 100, 325), radius=7, fill=GOLD)
+            styled_text(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
+            if other is not None: styled_text(d,(820,270),f"{other:g}%",20,WHITE,260,"ra")
+            if labels: styled_text(d,(145,350),labels[0],18,MUTED,300)
+            if len(labels)>1: styled_text(d,(820,350),labels[1],18,MUTED,300,"ra")
     elif visual == "formula":
         styled_text(d, (92, 175), scene["detail"], 32, WHITE, 780)
         d.line((95, 253, 95 + int(700 * progress), 253), fill=GOLD, width=2)

@@ -172,6 +172,10 @@ def visual_issues(plan):
             issues.append(f"镜头 {i} 的比例图缺少百分比")
         if scene["visual"] == "compare" and spec.get("parameters", {}).get("secondary_invalid"):
             issues.append(f"镜头 {i} 的对比百分比须在 0 至 100 之间")
+        if scene["visual"] == "compare" and spec["parameters"].get("compare_mode") == "complement":
+            value, other = spec["parameters"].get("value"), spec["parameters"].get("secondary_value")
+            if value is None or other is None or abs(value + other - 100) >= .15:
+                issues.append(f"镜头 {i} 的互补比例须有两个相加约为 100% 的数值")
         if scene["visual"] == "growth" and any(spec.get("parameters", {}).get(k) is None for k in ("principal", "rate", "periods")):
             issues.append(f"镜头 {i} 的复利动画需要有效本金、每期增长率和整数期数")
         if scene["visual"] == "distinct":

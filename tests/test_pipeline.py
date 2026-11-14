@@ -29,6 +29,26 @@ class PipelineTests(unittest.TestCase):
                 self.assertGreaterEqual(style_library.contrast_ratio(palette['muted'],palette[background]),4.5)
             self.assertIn(colors[0],profile['media_prompt'])
 
+    def test_complement_requires_explicit_consistent_values(self):
+        scene={'heading':'比较','narration':'两部分。','key':'比例','visual':'compare',
+               'spec':{'parameters':{'value':50.7,'secondary_value':49.3,'compare_mode':'complement'}}}
+        self.assertFalse(director.visual_issues(director.validate({'scenes':[scene]})))
+        scene['spec']['parameters']['secondary_value']=60
+        self.assertTrue(director.visual_issues(director.validate({'scenes':[scene]})))
+        scene['spec']['parameters']['secondary_value']=None
+        self.assertTrue(director.visual_issues(director.validate({'scenes':[scene]})))
+
+    def test_light_compare_shows_both_independent_percentages(self):
+        scene={'heading':'比较','narration':'比较两组。','key':'两组','visual':'compare',
+               'spec':{'parameters':{'value':30,'secondary_value':60,'labels':['甲','乙']}}}
+        p=director.validate({'scenes':[scene]})
+        with patch.object(render,'text_fit') as text:
+            render.frame(p['scenes'][0],0,1,4,4)
+            drawn=[str(c.args[2]) for c in text.call_args_list]
+        self.assertTrue(any('30%' in s for s in drawn))
+        self.assertTrue(any('60%' in s for s in drawn))
+        self.assertTrue(any('甲' in s for s in drawn));self.assertTrue(any('乙' in s for s in drawn))
+
     def test_invalid_percentages_are_not_silently_clamped(self):
         scene={'heading':'比较','narration':'比较比例。','key':'比例','visual':'compare','spec':{'parameters':{'value':150,'secondary_value':-5}}}
         result=director.validate({'scenes':[scene]})
