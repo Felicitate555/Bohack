@@ -111,6 +111,29 @@ class EmotionalDirectionTests(unittest.TestCase):
         explicit={'visual':'flow','spec':{'animation':{'sound_effect':'soft_reveal'}}}
         self.assertEqual(preserve_audio_controls(original,explicit)['spec']['animation']['sound_effect'],'soft_reveal')
 
+    @patch('app.providers.siliconflow.chat')
+    def test_full_optimizer_only_receives_valid_emotion_plan(self, chat):
+        from app.agents import animation_builder
+        chat.return_value=(json.dumps({'scenes':[self.scene()]}),{'role':'animation'})
+        animation_builder.improve_plan('主题',[self.scene()],emotion_plan={'status':'generated','payoff':'认识真实规律'})
+        self.assertIn('认识真实规律',chat.call_args.args[1][1]['content'])
+        animation_builder.improve_plan('主题',[self.scene()],emotion_plan={'status':'stale','payoff':'过期意图'})
+        self.assertNotIn('过期意图',chat.call_args.args[1][1]['content'])
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY':'test-only'})
+    @patch('app.agents.animation_builder.improve_plan')
+    @patch('app.providers.siliconflow.chat')
+    def test_full_plan_optimizer_receives_emotional_arc(self, chat, improve):
+        scene=self.scene()
+        emotion={'emotional_goal':'好奇到理解','core_tension':'人与配对数量的差异','payoff':'解释二百五十三对',
+                 'beats':[{'scene_index':0,'kind':'期待','execution':'delayed_reveal'}]}
+        chat.side_effect=[(json.dumps({'title':'生日'},ensure_ascii=False),{'role':'writer'}),
+                          (json.dumps({'title':'生日','scenes':[scene],'emotion_plan':emotion},ensure_ascii=False),{'role':'director_pro'})]
+        improve.return_value=({'scenes':[scene]},{'role':'animation'})
+        plan,_=director.generate('生日',mode='director')
+        self.assertEqual(improve.call_args.kwargs['emotion_plan']['payoff'],'解释二百五十三对')
+        self.assertTrue(plan['emotion_plan']['beats'][0]['applied'])
+
     def test_explicit_audio_control_changes_are_not_overwritten(self):
         from app.agents.animation_builder import preserve_audio_controls
         original={'spec':{'animation':{'narration_delay':1.3,'sound_effect':'soft_reveal','reveal_on_narration':True}}}

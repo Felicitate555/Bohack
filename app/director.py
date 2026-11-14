@@ -102,7 +102,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
         if mode == "director":
             try:
                 progress("正在优化动画设计；基础分镜已保存")
-                refined, event = animation_builder.improve_plan(topic, result["scenes"], profile=profile)
+                refined, event = animation_builder.improve_plan(topic, result["scenes"], profile=profile, emotion_plan=result.get("emotion_plan"))
                 records.append(event)
                 refined_scenes = refined.get("scenes")
                 if isinstance(refined_scenes, list) and len(refined_scenes) == len(result["scenes"]):

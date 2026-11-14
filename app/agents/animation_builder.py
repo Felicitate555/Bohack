@@ -32,12 +32,16 @@ def improve(scene, instruction, profile=None, emotion_beats=None):
     return siliconflow.parse_json(content), event
 
 
-def improve_plan(topic, scenes, profile=None):
+def improve_plan(topic, scenes, profile=None, emotion_plan=None):
     system = PRODUCTION_PRINCIPLES + "\n" + RENDERER_CONTRACT + """
 你是全片动态图形导演。收到已经完成的场景列表后，在已有组件范围内提高逐镜解释力和整片画面变化。保持镜头数量和顺序，不要改动标题、旁白、已有准确结论或捏造数值；画面参数必须与口播的实际含义一致。
 让相邻镜头尽可能使用不同但合适的表达，关键过程使用图形逐步建立，关键数字选择可解释其含义的画面，不要所有镜头都变成大字或流程线。能用素材作为背景增强真实氛围时可选择 image/video 并提供英文 prompt；公式和精确图表优先使用 animation。单个组件无法实现的复杂动作不可伪装成已实现。
 只输出 JSON 对象 {"scenes":[完整镜头对象,...]}；每一项必须包含 heading、narration、key、detail、visual 和 spec，不包含代码。"""
     system += "\n" + style_profile.director_context(profile)
-    source = json.dumps({"topic": topic, "scenes": scenes}, ensure_ascii=False)
+    source_data = {"topic": topic, "scenes": scenes}
+    if isinstance(emotion_plan, dict) and emotion_plan.get("status") == "generated":
+        source_data["emotion_plan"] = emotion_plan
+        system += "\n参考情绪计划中的观众期待、变化和知识回报；只实现引擎支持的动作，不将计划当作真实观众反应。"
+    source = json.dumps(source_data, ensure_ascii=False)
     content, event = siliconflow.chat("animation", [{"role": "system", "content": system}, {"role": "user", "content": source}], max_tokens=10000)
     return siliconflow.parse_json(content), event
