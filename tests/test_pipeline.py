@@ -948,6 +948,23 @@ class PipelineTests(unittest.TestCase):
             browser_render.render(plan,root/('c'*12),False,lambda _:None,previous_run='b'*12)
             self.assertEqual(encoder_call.call_count,2)
 
+    def test_changed_speech_duration_invalidates_cached_frames(self):
+        plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
+        page=MagicMock();page.screenshot.return_value=b'frame'
+        browser=MagicMock();browser.new_page.return_value=page
+        context=MagicMock();context.__enter__.return_value.chromium.launch.return_value=browser
+        module=types.ModuleType('playwright.sync_api');module.sync_playwright=lambda:context
+        def encoder(cmd,**kwargs):
+            Path(cmd[-1]).write_bytes(b'clip');proc=MagicMock();proc.stderr.read.return_value=b'';proc.wait.return_value=0;return proc
+        def create(scenes,outdir,*args,**kwargs): (outdir/'voice_0.mp3').write_bytes(b'voice')
+        def mux(cmd,**kwargs):Path(cmd[-1]).write_bytes(b'video')
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.dict(sys.modules,{'playwright.sync_api':module}), patch.object(browser_render,'available',return_value=True), patch.object(browser_render,'browser_path',return_value='chromium'), patch.object(browser_render.subprocess,'Popen',side_effect=encoder) as popen, patch.object(browser_render.subprocess,'run',side_effect=[types.SimpleNamespace(stdout='1.0'),types.SimpleNamespace(stdout='2.0')]), patch.object(speech,'create',side_effect=create), patch.object(browser_render,'run',side_effect=mux), patch.object(browser_render,'mux_audio'):
+            first=Path(root)/('a'*12)
+            browser_render.render(plan,first,True,lambda _:None)
+            (first/'voice_0.mp3').unlink()  # forces a new take with the same scene and voice settings
+            browser_render.render(plan,Path(root)/('b'*12),True,lambda _:None,previous_run='a'*12)
+            self.assertEqual(popen.call_count,2,'new speech timing must invalidate cached caption frames')
+
     def test_unchanged_scene_reuses_rendered_clip(self):
         plan = director.validate(director.example())
         plan['scenes'] = plan['scenes'][:1]

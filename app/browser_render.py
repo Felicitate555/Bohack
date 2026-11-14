@@ -188,7 +188,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 if effect_time is not None: scene["spec"]["timing"]["sound_effect_time"] = effect_time
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
-                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed,narration_mode], "cues":voice_cues[i] if voice else None}
+                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "speech_duration":scene["spec"]["timing"]["speech_duration"], "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed,narration_mode], "cues":voice_cues[i] if voice else None}
                 old = old_scenes[i] if i < len(old_scenes) else {}
                 prior_clip = previous_dir / f"scene_{i}.mp4" if previous_dir else None
                 media = scene["spec"].get("media") or {}
