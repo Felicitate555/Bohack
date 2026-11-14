@@ -136,5 +136,6 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
  x.fillStyle=gold;x.fillRect(margin,510,(960-margin*2)*((index+clamp(t/duration))/total),2);
  if(spec.transition==='fade'){let opacity=Math.max(0,1-Math.min(t/.35,(duration-t)/.35,1));x.fillStyle=`rgba(0,0,0,${opacity})`;x.fillRect(0,0,960,540)}
 }
-window.renderFrame=async(...args)=>{if(currentMedia&&currentKind==='video'&&Number.isFinite(currentMedia.duration)&&currentMedia.duration>0){let desired=(args[3]%Math.max(.1,currentMedia.duration-.05));if(Math.abs(currentMedia.currentTime-desired)>.015){await new Promise((resolve,reject)=>{let timer=setTimeout(()=>reject(new Error('视频素材定位超时')),10000);currentMedia.onseeked=()=>{clearTimeout(timer);resolve()};currentMedia.currentTime=desired})}}draw(...args)};
+function videoSeekTarget(t,duration){return t%Math.max(.001,duration-.001)}
+window.renderFrame=async(...args)=>{if(currentMedia&&currentKind==='video'&&Number.isFinite(currentMedia.duration)&&currentMedia.duration>0){let desired=videoSeekTarget(args[3],currentMedia.duration);if(Math.abs(currentMedia.currentTime-desired)>.015){await new Promise((resolve,reject)=>{let timer=setTimeout(()=>reject(new Error('视频素材定位超时')),10000);currentMedia.onseeked=()=>{clearTimeout(timer);resolve()};currentMedia.currentTime=desired})}}draw(...args)};
 </script></body></html>

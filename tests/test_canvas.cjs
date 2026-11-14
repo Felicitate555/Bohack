@@ -49,6 +49,8 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   assert.deepEqual(Array.from(sandbox.binarySearchSteps([2,5,9,12,17,23,31,46],17),s=>s.mid),[3,5,4]);
   let searching=scene('binary_search',{target:17});searching.spec.elements=[2,5,9,12,17,23,31,46].map(value=>({value}));await draw(searching);assert(texts.includes('找到：第 5 项'));
   searching.spec.parameters.target=18;await draw(searching);assert(texts.includes('未找到目标值'));
+  assert(sandbox.videoSeekTarget(.09,.08)<.08, 'short videos must never seek beyond duration');
+  assert(sandbox.videoSeekTarget(1,0.04)<.04, 'single-frame video must stay within media duration');
   const birthday=sandbox.distinctProbability(365,23);
   assert(Math.abs(birthday-.4927027657)<.0000001, '23 uniform independent draws should produce the correct distinct probability');
   assert.equal(sandbox.distinctProbability(2,3),0, 'more draws than categories must produce a collision');
