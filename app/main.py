@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import threading
+import time
 import uuid
 import copy
 import subprocess
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,7 @@ if envfile.exists():
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 app = FastAPI(title="VibeLab")
+project_io_lock = threading.RLock()
 render_lock = threading.Lock()
 render_tasks_lock = threading.RLock()
 render_tasks = {}
@@ -74,9 +76,10 @@ def project_dir(pid):
 
 def read_project(pid):
     path = project_dir(pid) / "project.json"
-    if not path.exists():
-        raise HTTPException(404, "项目不存在")
-    project = json.loads(path.read_text(encoding="utf-8"))
+    with project_io_lock:
+        if not path.exists():
+            raise HTTPException(404, "项目不存在")
+        project = json.loads(path.read_text(encoding="utf-8"))
     with planning_lock:
         active = pid in planning_active
     if (project.get("planning_job") or {}).get("status") == "running" and not active:
@@ -92,12 +95,27 @@ def read_project(pid):
 
 
 def save(pid, obj):
-    obj["updated_at"] = datetime.now(timezone.utc).isoformat()
     path = project_dir(pid) / "project.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    with project_io_lock:
+        obj["updated_at"] = datetime.now(timezone.utc).isoformat()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.parent / (".project-" + uuid.uuid4().hex + ".tmp")
+        created = False
+        try:
+            with tmp.open("x", encoding="utf-8") as output:
+                created = True
+                output.write(json.dumps(obj, ensure_ascii=False, indent=2))
+            for attempt in range(4):
+                try:
+                    tmp.replace(path)
+                    break
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(.05 * (attempt + 1))
+        finally:
+            if created:
+                tmp.unlink(missing_ok=True)
 
 
 def start_locked_render_worker(pid, plan, work):
@@ -172,7 +190,8 @@ def projects():
     results = []
     for path in DATA.glob("*/project.json"):
         try:
-            p = json.loads(path.read_text(encoding="utf-8"))
+            with project_io_lock:
+                p = json.loads(path.read_text(encoding="utf-8"))
             results.append({k: p.get(k) for k in ("id", "title", "topic", "updated_at", "mode", "job", "planning_job")})
         except (OSError, json.JSONDecodeError):
             continue
@@ -615,7 +634,9 @@ def cancel_render(pid: str):
 def export(pid: str, kind: str):
     p = read_project(pid)
     if kind == "json":
-        return FileResponse(project_dir(pid) / "project.json", filename="vibelab-project.json", media_type="application/json")
+        with project_io_lock:
+            content = (project_dir(pid) / "project.json").read_bytes()
+        return Response(content=content, media_type="application/json", headers={"Content-Disposition": 'attachment; filename="vibelab-project.json"'})
     job = p.get("job") or {}
     files = {"mp4": ("video.mp4", "video/mp4"), "srt": ("subtitles.srt", "application/x-subrip")}
     completed = job if job.get("status") == "done" else (job.get("last_completed") or {})

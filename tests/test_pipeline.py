@@ -457,8 +457,11 @@ class PipelineTests(unittest.TestCase):
             main.update_project(plan['id'], plan)
             main.start_render(plan['id'], main.RenderRequest())
             self.assertEqual(main.read_project(plan['id'])['scenes'][0]['heading'], '已编辑')
-            for kind in ['mp4', 'srt', 'json']:
+            for kind in ['mp4', 'srt']:
                 self.assertTrue(Path(main.export(plan['id'], kind).path).is_file())
+            exported=main.export(plan['id'], 'json')
+            self.assertEqual(json.loads(exported.body)['scenes'][0]['heading'],'已编辑')
+            self.assertIn('attachment',exported.headers['content-disposition'])
 
     @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
     def test_background_planning_exposes_state_while_worker_runs(self):
