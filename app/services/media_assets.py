@@ -20,18 +20,18 @@ def prepare(plan, directory, update, persist):
         kind = media.get("kind")
         if kind not in {"image", "video"}:
             continue
-        if not media.get("prompt"):
-            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 未填写素材描述，已使用程序动画。")
-            persist(); continue
-        if media.get("asset_id") and (asset_dir / (media["asset_id"] + (".mp4" if kind == "video" else ".png"))).exists():
+        if media.get("asset_id") and (asset_dir / (media["asset_id"] + (".mp4" if kind == "video" else ".png"))).is_file():
             continue
         if media.get("submission_state") == "uncertain" and not media.get("request_id"):
             plan.setdefault("warnings", []).append(f"镜头 {idx+1} 上一次素材请求结果不明确，已停止重复提交；请检查平台任务后决定是否重置。")
             persist(); continue
+        if not media.get("prompt") and not (kind == "video" and media.get("request_id")):
+            plan.setdefault("warnings", []).append(f"镜头 {idx+1} 未填写素材描述，已使用程序动画。")
+            persist(); continue
         asset_id = uuid.uuid4().hex
         event = None
         target = asset_dir / (asset_id + (".mp4" if kind == "video" else ".png"))
-        styled_prompt = style_profile.media_prompt(media["prompt"], plan.get("style_profile"))
+        styled_prompt = style_profile.media_prompt(media.get("prompt", ""), plan.get("style_profile"))
         update(f"正在制作镜头 {idx+1} 的{'图片' if kind == 'image' else '视频'}素材")
         try:
             if kind == "image":

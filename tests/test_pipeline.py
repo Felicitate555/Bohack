@@ -666,6 +666,28 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(events), 2)
         self.assertIn('不要编造数据', chat.call_args_list[1].args[1][-1]['content'])
 
+    def test_existing_video_task_is_resumed_when_prompt_is_empty(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            root=Path(folder);scene={'spec':{'media':{'kind':'video','prompt':'','asset_id':'','request_id':'task-123','submission_state':'submitted'}}}
+            plan={'scenes':[scene]}
+            def download(url,path,*args):Path(path).write_bytes(b'video')
+            with patch.object(siliconflow,'video_submit') as submit,patch.object(siliconflow,'video_status',return_value=('Succeed','mock-url')) as status,patch.object(siliconflow,'download',side_effect=download):
+                media_assets.prepare(plan,root,lambda _:None,lambda:None)
+            submit.assert_not_called();status.assert_called_once_with('task-123')
+            self.assertTrue(scene['spec']['media']['asset_id'])
+            self.assertFalse(plan.get('warnings'))
+
+    def test_existing_asset_is_reused_even_when_prompt_is_empty(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            root=Path(folder);(root/'assets').mkdir();(root/'assets'/('a'*32+'.png')).write_bytes(b'existing')
+            scene={'spec':{'media':{'kind':'image','prompt':'','asset_id':'a'*32,'request_id':'','submission_state':''}}}
+            plan={'scenes':[scene]}
+            with patch.object(siliconflow,'image') as image:
+                media_assets.prepare(plan,root,lambda _:None,lambda:None)
+            image.assert_not_called()
+            self.assertFalse(any('未填写' in w for w in plan.get('warnings',[])))
+            self.assertEqual(scene['spec']['media']['asset_id'],'a'*32)
+
     def test_all_selected_images_are_generated_without_price_configuration(self):
         scenes = [{'spec': {'media': {'kind': 'image', 'prompt': 'blue sky', 'asset_id': '', 'request_id': '', 'submission_state': ''}}} for _ in range(2)]
         with tempfile.TemporaryDirectory(dir='data') as root:
