@@ -11,7 +11,10 @@ def preserve_audio_controls(original, revised):
     if not isinstance(revised.get("spec"), dict): revised["spec"] = {}
     if not isinstance(revised["spec"].get("animation"), dict): revised["spec"]["animation"] = {}
     source = original.get("spec", {}).get("animation", {})
+    changed_visual = bool(revised.get("visual")) and revised.get("visual") != original.get("visual")
     for key in ("narration_delay", "reveal_on_narration", "sound_effect"):
+        if changed_visual and key in ("reveal_on_narration", "sound_effect"):
+            continue
         if key not in revised["spec"]["animation"] and key in source:
             revised["spec"]["animation"][key] = source[key]
     return revised

@@ -100,6 +100,17 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertFalse(result['beats'][0]['applied'])
         self.assertIn('镜头',result['beats'][0]['actual'])
 
+    def test_changed_visual_does_not_inherit_question_specific_reveal(self):
+        from app.agents.animation_builder import preserve_audio_controls
+        original={'visual':'question','spec':{'animation':{'narration_delay':1.3,'reveal_on_narration':True,'sound_effect':'soft_reveal'}}}
+        revised={'visual':'flow','spec':{'animation':{}}}
+        animation=preserve_audio_controls(original,revised)['spec']['animation']
+        self.assertEqual(animation['narration_delay'],1.3)
+        self.assertFalse(animation.get('reveal_on_narration',False))
+        self.assertEqual(animation.get('sound_effect','none'),'none')
+        explicit={'visual':'flow','spec':{'animation':{'sound_effect':'soft_reveal'}}}
+        self.assertEqual(preserve_audio_controls(original,explicit)['spec']['animation']['sound_effect'],'soft_reveal')
+
     def test_explicit_audio_control_changes_are_not_overwritten(self):
         from app.agents.animation_builder import preserve_audio_controls
         original={'spec':{'animation':{'narration_delay':1.3,'sound_effect':'soft_reveal','reveal_on_narration':True}}}
