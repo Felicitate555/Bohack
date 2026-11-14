@@ -56,7 +56,7 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
  if(type==='dots'||type==='network'){
   let pts=networkPositions(count,layout,animation.node_motions||[],t,duration,beats);
   let visible=Math.max(1,Math.ceil(p*count));
-  let shown=0,total=0;if(type==='network'){let lines=(params.edges||[]).length?params.edges:[];if(!lines.length)for(let i=0;i<count;i++)for(let j=i+1;j<count;j++)lines.push([i,j]);total=lines.length;shown=Math.floor(p*total);x.strokeStyle=rgba(gold,.13);x.lineWidth=1;for(let k=0;k<shown;k++){let [a,b]=lines[k];x.beginPath();x.moveTo(...pts[a]);x.lineTo(...pts[b]);x.stroke()}visible=count}
+  let shown=0,total=0;if(type==='network'){let lines=(params.edges||[]).length?params.edges:[];if(!lines.length)for(let i=0;i<count;i++)for(let j=i+1;j<count;j++)lines.push([i,j]);total=lines.length;shown=Math.floor(p*total);let edgeAlpha=total<=12?.5:total>=100?.13:.5-(total-12)*.37/88;x.strokeStyle=rgba(gold,edgeAlpha);x.lineWidth=1;for(let k=0;k<shown;k++){let [a,b]=lines[k];x.beginPath();x.moveTo(...pts[a]);x.lineTo(...pts[b]);x.stroke()}visible=count}
   pts.slice(0,visible).forEach(([a,b])=>dot(a,b,3*pulse));text(s.key,95,240,60,gold,'left',380);text(s.detail,95,282,19,muted,'left',395);if(type==='network'&&params.count)text(`连线 ${shown} / ${total}`,95,320,18,gold);
  }else if(type==='binary_search'){
   let values=(spec.elements||[]).map(e=>e.value),target=params.target,steps=params.search_invalid?[]:binarySearchSteps(values,target);
