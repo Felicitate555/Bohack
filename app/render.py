@@ -136,7 +136,7 @@ def frame(scene, index, count, t, duration):
             points = [(540 + 300 * (i-1) / max(1, draws-1), 335 - distinct_probability(categories, i) * 160) for i in range(1, step+1)]
             if len(points) > 1: d.line(points, fill=GOLD, width=3)
             x, y = points[-1]; d.ellipse((x-4, y-4, x+4, y+4), fill=GOLD)
-            text_fit(d, (100, 395), "独立、等概率抽取（允许重复）；忽略其他条件", 13, MUTED, 760)
+            text_fit(d, (100, 395), "独立、等概率抽取（允许重复）", 13, MUTED, 760)
     elif visual == "flow":
         params = (scene.get("spec") or {}).get("parameters") or {}
         labels = (params.get("labels") or ["01", "02", "03"])[:5]

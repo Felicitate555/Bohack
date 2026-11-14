@@ -41,6 +41,18 @@ class PipelineTests(unittest.TestCase):
         values = [str(c.args[2]) for c in drawn.call_args_list]
         self.assertTrue(any('49.27%' in value for value in values))
         self.assertTrue(any('50.73%' in value for value in values))
+        self.assertTrue(any('独立' in value and '等概率' in value for value in values))
+        self.assertFalse(any('忽略其他条件' in value for value in values))
+
+    def test_light_renderer_preserves_user_text_and_missing_data_error(self):
+        scene = director.validate({'scenes':[{'heading':'测试','narration':'说明','key':'重点','detail':'用户输入：粒子数量为示意','visual':'dots','spec':{'parameters':{'count':3}}}]})['scenes'][0]
+        with patch.object(render, 'text_fit', wraps=render.text_fit) as drawn:
+            render.frame(scene, 0, 1, 4, 4)
+        self.assertTrue(any('用户输入：粒子数量为示意' == str(c.args[2]) for c in drawn.call_args_list))
+        scene['visual']='distinct';scene['spec']['parameters']['categories']=None
+        with patch.object(render, 'text_fit', wraps=render.text_fit) as drawn:
+            render.frame(scene, 0, 1, 4, 4)
+        self.assertTrue(any('请填写有效' in str(c.args[2]) for c in drawn.call_args_list))
 
     def test_light_network_uses_validated_nodes_edges_and_motion(self):
         item = {'heading':'节点','narration':'关系','key':'网络','visual':'network',

@@ -18,7 +18,7 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   await draw(scene('network',{count:3,edges:[[0,1],[1,2]]}));
   assert(texts.some(t=>t.includes('2 / 2')), 'custom graph should use only the requested edges');
   await draw(scene('scattering',{}));
-  assert(lines >= 9 && texts.includes('光线与散射方向为示意'), 'scattering should draw rays and mark illustration');
+  assert(lines >= 9, 'scattering should draw rays');
   assert(texts.includes('光源') && texts.includes('观察者'), 'scattering should identify light source and observer');
   await draw(scene('scattering',{optical_path:'long'}));
   assert(texts.some(t=>t.includes('长光程')) && texts.some(t=>t.includes('直射光偏暖')), 'long path should explain warmer transmitted light');
@@ -27,6 +27,12 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   assert(texts.some(t=>t.includes('130')), 'simple interest comparison should end at 130');
   assert(texts.some(t=>t.includes('12.1')), 'third-period interest should be 12.1');
   assert(texts.some(t=>t.includes('计入本金')), 'the interest should be described as added to principal');
+  for(const item of [scene('dots',{}),scene('growth',{principal:100,rate:10,periods:3}),scene('divergence',{}),scene('scattering',{}),scene('lorenz',{})]){
+    await draw(item);
+    assert(!texts.some(t=>/粒子数量为示意|曲线为示意，不代表历史实验数据|固定增长率的数学示意，不代表实际收益|光线与散射方向为示意/.test(t)), 'renderer should not add repetitive disclaimers');
+  }
+  const authored=scene('dots',{});authored.detail='用户输入：粒子数量为示意';await draw(authored);
+  assert(texts.includes(authored.detail), 'user-authored text must remain visible');
   const event = {property:'translate_x',start:.2,end:.6,from:0,to:40,easing:'linear',beat_binding:true};
   assert.equal(sandbox.eventValue(event, 2.1, 10, [2.1,6.2]), 0);
   assert.equal(sandbox.eventValue(event, 6.2, 10, [2.1,6.2]), 40);

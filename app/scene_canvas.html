@@ -42,7 +42,7 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
   let pts=networkPositions(count,layout,animation.node_motions||[],t,duration,beats);
   let visible=Math.max(1,Math.ceil(p*count));
   let shown=0,total=0;if(type==='network'){let lines=(params.edges||[]).length?params.edges:[];if(!lines.length)for(let i=0;i<count;i++)for(let j=i+1;j<count;j++)lines.push([i,j]);total=lines.length;shown=Math.floor(p*total);x.strokeStyle='rgba(214,179,106,.13)';x.lineWidth=1;for(let k=0;k<shown;k++){let [a,b]=lines[k];x.beginPath();x.moveTo(...pts[a]);x.lineTo(...pts[b]);x.stroke()}visible=count}
-  pts.slice(0,visible).forEach(([a,b])=>dot(a,b,3*pulse));text(s.key,95,240,60,gold,'left',380);text(s.detail,95,282,19,muted,'left',395);if(type==='network'&&params.count)text(`连线 ${shown} / ${total}`,95,320,18,gold);if(!params.count)text('粒子数量为示意',650,410,15,muted,'center');
+  pts.slice(0,visible).forEach(([a,b])=>dot(a,b,3*pulse));text(s.key,95,240,60,gold,'left',380);text(s.detail,95,282,19,muted,'left',395);if(type==='network'&&params.count)text(`连线 ${shown} / ${total}`,95,320,18,gold);
  }else if(type==='compare'){
   const value=params.value,secondary=params.secondary_value;
   text(s.key,100,220,67,gold);if(value!==null&&value!==undefined){let totalWidth=730;x.fillStyle='#353024';x.fillRect(110,288,totalWidth,22);x.fillStyle=gold;x.fillRect(110,288,totalWidth*value/100*p,22);text((params.labels||[])[0]||'',110,347,18,muted);text((params.labels||[])[1]||'',840,347,18,muted,'right');if(secondary!==null&&secondary!==undefined)text(Math.abs(value+secondary-100)<.15?`1 − ${secondary}% = ${value}%`:`${secondary}%   /   ${value}%`,840,260,26,warm,'right')}else text('请填写比例数值',110,310,20,muted);
@@ -60,7 +60,7 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
    text('100%',left-8,top+4,12,muted,'right');text('0%',left-8,bottom+4,12,muted,'right');
    x.strokeStyle=gold;x.lineWidth=2.5;x.beginPath();for(let i=1;i<=step;i++){let px=left+(right-left)*(i-1)/Math.max(1,draws-1),py=bottom-distinctProbability(categories,i)*(bottom-top);x[i===1?'moveTo':'lineTo'](px,py)}x.stroke();
    let px=left+(right-left)*(step-1)/Math.max(1,draws-1),py=bottom-prob*(bottom-top);dot(px,py,4*pulse);text(`第 ${step} 次`,px,360,13,muted,'center');
-   text('独立、等概率抽取（允许重复）；忽略其他条件',100,415,13,muted,'left',760);
+   text('独立、等概率抽取（允许重复）',100,415,13,muted,'left',760);
   }
  }else if(type==='bars'||type==='curve'){
   let values=spec.elements||[];let negative=values.some(v=>v.value<0);if(negative)values=[];let max=Math.max(1,...values.map(v=>v.value||0));x.strokeStyle='#746447';x.beginPath();x.moveTo(170,350);x.lineTo(820,350);x.stroke();let coords=[];values.forEach((v,i)=>{let px=220+i*(540/Math.max(1,values.length-1)),py=340-(v.value||0)/max*160*p;coords.push([px,py]);if(type==='bars'){x.fillStyle='#c5a369';x.fillRect(px-20,py,40,350-py)}text(v.label,px,380,15,muted,'center')});if(type==='curve'){x.strokeStyle=gold;x.lineWidth=3;x.beginPath();coords.forEach(([a,b],i)=>i?x.lineTo(a,b):x.moveTo(a,b));x.stroke();coords.forEach(([a,b])=>dot(a,b,4))}if(!values.length)text(negative?'暂不支持负值图表':'没有可绘制的数据',480,260,20,muted,'center');text(s.key,95,180,42,gold);
@@ -74,16 +74,16 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
    plot('#83b8dc',q=>principal*(1+rate/100*periods*q));plot(gold,valueAt);
    let px=left+(right-left)*p,py=bottom-valueAt(p)/span*(bottom-top-10);dot(px,py,4*pulse);
    const fmt=n=>n>=1e9?n.toExponential(2):n.toLocaleString('en-US',{maximumFractionDigits:2});text('本金 '+fmt(principal),160,156,15,muted);text(`每期 ${rate}% · ${periods} 期`,830,156,15,muted,'right');text('复利',175,183,14,gold);text('单利（仅本金计息）',245,183,14,'#83b8dc');
-   text('第 '+completed+' 期',160,360,15,muted);text('单利 '+fmt(simple),410,360,16,'#83b8dc');text(fmt(shown),830,360,24,gold,'right');text(completed?`本期利息 ${fmt(interest)} 计入本金`:'等待首期利息计入本金',160,382,15,warm,'left',610);text('固定增长率的数学示意，不代表实际收益',830,418,13,muted,'right');
+   text('第 '+completed+' 期',160,360,15,muted);text('单利 '+fmt(simple),410,360,16,'#83b8dc');text(fmt(shown),830,360,24,gold,'right');text(completed?`本期利息 ${fmt(interest)} 计入本金`:'等待首期利息计入本金',160,382,15,warm,'left',610);
   }
  }else if(type==='divergence'){
   panel(105,138,750,260);let left=140,top=170,width=670,height=190;
   x.strokeStyle='rgba(214,179,106,.10)';x.lineWidth=1;for(let i=0;i<5;i++){let gy=top+i*height/4;x.beginPath();x.moveTo(left,gy);x.lineTo(left+width,gy);x.stroke()}
   const limit=Math.max(2,Math.floor(120*p));for(let side of [-1,1]){x.strokeStyle=side<0?'#e0c586':'#8ebce5';x.lineWidth=2.6;x.beginPath();for(let i=0;i<=limit;i++){let u=i/120,base=252-25*Math.sin(u*7)-12*Math.sin(u*17),delta=Math.min(67,1.8*Math.exp(4*u))*clamp((u-.22)*3),py=base+side*delta;x[i?'lineTo':'moveTo'](left+u*width,py)}x.stroke()}
-  const labels=params.labels||[];text(labels[0]||'初始条件 A',155,163,14,gold);text(labels[1]||'初始条件 B',420,163,14,'#9cc8ee');text('两条变化轨迹逐渐分开',480,390,19,warm,'center');text('曲线为示意，不代表历史实验数据',840,418,13,muted,'right');
+  const labels=params.labels||[];text(labels[0]||'初始条件 A',155,163,14,gold);text(labels[1]||'初始条件 B',420,163,14,'#9cc8ee');text('两条概念轨迹逐渐分开',480,390,19,warm,'center');
  }else if(type==='lorenz'){
   panel(80,132,800,285);text(s.key,110,195,33,gold,'left',290);text(s.detail,110,232,16,muted,'left',295);
-  let show=Math.max(2,Math.floor(LORENZ_POINTS.length*p));x.lineWidth=1.3;x.strokeStyle='rgba(220,188,127,.72)';x.beginPath();for(let i=0;i<show;i++){let [a,b]=LORENZ_POINTS[i],px=640+a*5.8,py=375-b*5.1;x[i?'lineTo':'moveTo'](px,py)}x.stroke();let marker=p>=.999?Math.floor(t*140)%LORENZ_POINTS.length:show-1,last=LORENZ_POINTS[marker];dot(640+last[0]*5.8,375-last[1]*5.1,4*pulse);text('洛伦兹系统数值积分示意',110,390,14,muted);
+  let show=Math.max(2,Math.floor(LORENZ_POINTS.length*p));x.lineWidth=1.3;x.strokeStyle='rgba(220,188,127,.72)';x.beginPath();for(let i=0;i<show;i++){let [a,b]=LORENZ_POINTS[i],px=640+a*5.8,py=375-b*5.1;x[i?'lineTo':'moveTo'](px,py)}x.stroke();let marker=p>=.999?Math.floor(t*140)%LORENZ_POINTS.length:show-1,last=LORENZ_POINTS[marker];dot(640+last[0]*5.8,375-last[1]*5.1,4*pulse);text('洛伦兹系统 · 数值积分',110,390,14,muted);
  }else if(type==='amplify'){
   let labels=(params.labels||[]).slice(0,5);if(labels.length<2)labels=['初始变化','系统响应','变化扩大','后续结果'];let left=140,space=680/Math.max(1,labels.length-1),active=Math.max(1,Math.ceil(p*labels.length));
   text(s.key,480,165,36,gold,'center',760);for(let i=0;i<labels.length;i++){let px=left+i*space,r=8+i*6;if(i<labels.length-1){x.strokeStyle=i<active-1?'rgba(214,179,106,.65)':'rgba(214,179,106,.15)';x.lineWidth=2+i*.5;x.beginPath();x.moveTo(px+r+6,255);x.lineTo(px+space-15,255);x.stroke()}if(i<active){x.beginPath();x.arc(px,255,r+11+Math.sin(t*1.4+i)*2,0,Math.PI*2);x.strokeStyle='rgba(214,179,106,.18)';x.stroke();dot(px,255,r*pulse);text(labels[i],px,330,16,warm,'center',space-8)}}text(s.detail,480,385,16,muted,'center',790);
@@ -102,7 +102,7 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
   }
   text('介质分子',485,320,15,muted,'center');let ox=longPath?810:790,oy=longPath?245:335;x.strokeStyle='#e7d7b6';x.lineWidth=2;x.beginPath();x.arc(ox,oy,12,0,Math.PI*2);x.moveTo(ox,oy+12);x.lineTo(ox,oy+35);x.stroke();text((params.labels||[])[1]||'观察者',ox,oy+57,15,warm,'center',140);
   if(!longPath){let start=595,q=clamp((front-start)/(800-start));if(q>0){x.strokeStyle='#78b8ff';x.globalAlpha=opacity*.7;x.beginPath();x.moveTo(start,cy);x.lineTo(start+(780-start)*q,cy+78*q);x.stroke();x.globalAlpha=opacity}}
-  text(s.detail,150,375,16,muted,'left',520);text(longPath?'暖色：透射光示意':'蓝色：短波散射示意',150,408,13,muted);text('光线与散射方向为示意',800,418,13,muted,'right');
+  text(s.detail,150,375,16,muted,'left',520);text(longPath?'暖色 · 透射光':'蓝色 · 短波散射',150,408,13,muted);
  }else if(type==='geometry'){
   let sides=Math.max(3,Math.min(8,params.sides||3)),cx=layout.graphic_x||650,cy=layout.graphic_y||255,r=110;let points=[];for(let i=0;i<sides;i++){let a=-Math.PI/2+i*2*Math.PI/sides;points.push([cx+Math.cos(a)*r,cy+Math.sin(a)*r])}x.strokeStyle=gold;x.lineWidth=3;x.beginPath();points.forEach(([a,b],i)=>i?x.lineTo(a,b):x.moveTo(a,b));x.closePath();x.globalAlpha=opacity*(.1+.9*p);x.stroke();x.fillStyle='rgba(214,179,106,.10)';x.fill();x.globalAlpha=opacity;points.slice(0,Math.ceil(sides*p)).forEach(([a,b])=>dot(a,b,4*pulse));text(s.key,95,240,52,gold,'left',380);text(s.detail,95,295,19,muted,'left',390);
  }else if(type==='flow'||type==='timeline'){
