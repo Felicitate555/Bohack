@@ -104,7 +104,10 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
                 progress("正在优化动画设计；基础分镜已保存")
                 refined, event = animation_builder.improve_plan(topic, result["scenes"], profile=profile)
                 records.append(event)
-                candidate = validate({"title": result["title"], "topic": topic, "scenes": refined.get("scenes"), "style_profile": profile})
+                refined_scenes = refined.get("scenes")
+                if isinstance(refined_scenes, list) and len(refined_scenes) == len(result["scenes"]):
+                    refined_scenes = [animation_builder.preserve_audio_controls(old, new) for old, new in zip(result["scenes"], refined_scenes)]
+                candidate = validate({"title": result["title"], "topic": topic, "scenes": refined_scenes, "style_profile": profile})
                 if len(candidate["scenes"]) != len(result["scenes"]) or visual_issues(candidate):
                     raise ValueError("动画规划的镜头数量或图表参数无效")
                 for old, new in zip(result["scenes"], candidate["scenes"]):

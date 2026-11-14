@@ -4,6 +4,19 @@ from .creative_brief import PRODUCTION_PRINCIPLES, RENDERER_CONTRACT
 from .. import style_profile
 
 
+def preserve_audio_controls(original, revised):
+    """Preserve existing choices only when the model omitted these fields."""
+    if not isinstance(revised, dict):
+        return revised
+    if not isinstance(revised.get("spec"), dict): revised["spec"] = {}
+    if not isinstance(revised["spec"].get("animation"), dict): revised["spec"]["animation"] = {}
+    source = original.get("spec", {}).get("animation", {})
+    for key in ("narration_delay", "reveal_on_narration", "sound_effect"):
+        if key not in revised["spec"]["animation"] and key in source:
+            revised["spec"]["animation"][key] = source[key]
+    return revised
+
+
 def improve(scene, instruction, profile=None, emotion_beats=None):
     system = PRODUCTION_PRINCIPLES + "\n" + RENDERER_CONTRACT + """
 你负责按用户要求修改一个现有镜头，输出完整的 JSON 镜头对象，而不是项目或场景数组。优先保留原有准确的知识点、口播和数值，仅在用户要求或确有错误时修改；不得丢失组件必需的数据。让画面表达知识本身，避免只把英文内部标签放大。若要求当前组件无法实现，就选最接近且不误导的组件，不能用 action 文字假装已经实现。

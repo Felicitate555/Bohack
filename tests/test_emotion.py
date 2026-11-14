@@ -100,6 +100,30 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertFalse(result['beats'][0]['applied'])
         self.assertIn('镜头',result['beats'][0]['actual'])
 
+    def test_explicit_audio_control_changes_are_not_overwritten(self):
+        from app.agents.animation_builder import preserve_audio_controls
+        original={'spec':{'animation':{'narration_delay':1.3,'sound_effect':'soft_reveal','reveal_on_narration':True}}}
+        revised={'spec':{'animation':{'narration_delay':0,'sound_effect':'none','reveal_on_narration':False}}}
+        self.assertEqual(preserve_audio_controls(original,revised),revised)
+        self.assertEqual(revised['spec']['animation']['sound_effect'],'none')
+        self.assertEqual(revised['spec']['animation']['narration_delay'],0)
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY':'test-only'})
+    @patch('app.providers.siliconflow.chat')
+    def test_director_plan_optimization_preserves_omitted_audio_controls(self, chat):
+        import copy
+        initial=self.scene();initial['spec']['animation']={'narration_delay':1.3,'reveal_on_narration':True,'sound_effect':'soft_reveal'}
+        refined=copy.deepcopy(initial);refined['heading']='优化画面';refined['spec']['animation']={}
+        writer={'title':'主题'};plan={'title':'主题','scenes':[initial]}
+        chat.side_effect=[(json.dumps(writer,ensure_ascii=False),{'role':'writer'}),
+                          (json.dumps(plan,ensure_ascii=False),{'role':'director_pro'}),
+                          (json.dumps({'scenes':[refined]},ensure_ascii=False),{'role':'animation'})]
+        result,_=director.generate('主题',mode='director')
+        settings=result['scenes'][0]['spec']['animation']
+        self.assertEqual(settings['narration_delay'],1.3)
+        self.assertTrue(settings['reveal_on_narration'])
+        self.assertEqual(settings['sound_effect'],'soft_reveal')
+
     def test_optimization_omissions_preserve_existing_narration_and_sound_settings(self):
         import copy
         with tempfile.TemporaryDirectory(dir='data') as folder, patch.object(main,'DATA',Path(folder)):

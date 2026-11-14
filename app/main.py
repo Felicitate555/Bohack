@@ -363,13 +363,7 @@ def improve_scene(pid: str, index: int, body: SceneEdit):
         emotion = plan.get("emotion_plan") or {}
         beats = [b for b in emotion.get("beats", []) if isinstance(b, dict) and b.get("scene_index") == index] if emotion.get("status") == "generated" else []
         revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"), emotion_beats=beats)
-        if isinstance(revised, dict):
-            if not isinstance(revised.get("spec"), dict): revised["spec"] = {}
-            if not isinstance(revised["spec"].get("animation"), dict): revised["spec"]["animation"] = {}
-            original_animation = scene.get("spec", {}).get("animation", {})
-            for key in ("narration_delay", "reveal_on_narration", "sound_effect"):
-                if key not in revised["spec"]["animation"] and key in original_animation:
-                    revised["spec"]["animation"][key] = original_animation[key]
+        revised = animation_builder.preserve_audio_controls(scene, revised)
         validated = director.validate({"title": plan["title"], "topic": plan["topic"], "scenes": [revised], "style_profile": plan.get("style_profile")})["scenes"][0]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
