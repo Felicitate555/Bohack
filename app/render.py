@@ -107,8 +107,10 @@ def frame(scene, index, count, t, duration, profile=None):
         x = (i * 157 + 83) % W
         y = (i * 83 + 41) % 420
         d.ellipse((x, y, x + 1, y + 1), fill=dust)
-    d.text((margin, 28), f"{index + 1:02}  /  {count:02}     V I B E L A B", font=font(14, family), fill=MUTED)
-    d.line((margin, 54, W-margin, 54), fill=MUTED, width=1)
+    cinematic = (scene.get("spec") or {}).get("layout", {}).get("frame") == "cinematic"
+    if not cinematic:
+        d.text((margin, 28), f"{index + 1:02}  /  {count:02}     V I B E L A B", font=font(14, family), fill=MUTED)
+        d.line((margin, 54, W-margin, 54), fill=MUTED, width=1)
     styled_text(d, (margin, 77), scene["heading"], typography["title_size"], WHITE, W-margin*2)
     progress = min(1.0, max(0.0, t / max(1, duration * .6)))
     animation = (scene.get("spec") or {}).get("animation") or {}
@@ -232,7 +234,8 @@ def frame(scene, index, count, t, duration, profile=None):
     captions = list(caption_timeline(scene["narration"], duration, speech_duration, timing.get("caption_cues"), timing.get("narration_delay", 0)))
     caption = next((part for part, start, end in captions if start <= t < end), "")
     styled_text(d, (480, style["layout"]["subtitle_y"]-7), caption, typography["subtitle_size"], WHITE, W-margin*2, "mm")
-    d.line((margin, 510, margin + int((W-margin*2) * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
+    if not cinematic:
+        d.line((margin, 510, margin + int((W-margin*2) * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
     return im
 
 

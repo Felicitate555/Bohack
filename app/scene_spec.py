@@ -171,7 +171,7 @@ def scene_spec(scene):
         "knowledge_point": str(raw.get("knowledge_point", scene.get("detail", "")))[:160],
         "visual_type": visual,
         "elements": elements,
-        "layout": {"safe_margin": 0.06, "composition": "left-title-right-graphic", "graphic_x": number(layout.get("graphic_x"), 650, 520, 750), "graphic_y": number(layout.get("graphic_y"), 255, 200, 300)},
+        "layout": {"safe_margin": 0.06, "composition": "left-title-right-graphic", "frame": layout.get("frame") if layout.get("frame") in {"standard", "cinematic"} else "standard", "graphic_x": number(layout.get("graphic_x"), 650, 520, 750), "graphic_y": number(layout.get("graphic_y"), 255, 200, 300)},
         "animation": {"action": str(animation.get("action", "逐步呈现"))[:80], "motion": motion, "keyframes": [start, finish], "narration_delay": bounded(animation.get("narration_delay"), 0, 2) or 0, "reveal_on_narration": animation.get("reveal_on_narration") is True, "sound_effect": animation.get("sound_effect") if animation.get("sound_effect") in {"none", "soft_reveal"} else "none", "beat_binding": bool(animation.get("beat_binding", True)), "events": animation_events(animation.get("events")), "node_motions": motions, "node_motions_invalid": motions_invalid},
         "transition": raw.get("transition") if raw.get("transition") in {"fade", "cut"} else "fade",
         "style": {"background": "#0b0b0f", "accent": "#d6b36a", "text": "#f5f1e8"},

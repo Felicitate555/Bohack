@@ -13,6 +13,10 @@ vm.runInNewContext(script, sandbox);
 function scene(visual, parameters){return {heading:'测试',key:'重点',detail:'说明',narration:'一句解释。',visual,spec:{parameters,animation:{keyframes:[0,.65]}}}}
 async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.renderFrame(s,0,1,t,4,[],[],960,540)}
 (async()=>{
+  let clean=scene('question',{candidates:['50','23']});clean.spec.layout={frame:'cinematic'};await draw(clean);
+  assert(!texts.some(t=>t.includes('V I B E L A B')), 'cinematic frame should omit recurring section furniture');
+  assert(texts.includes('测试'), 'cinematic frame keeps authored title');
+  await draw(scene('question',{}));assert(texts.some(t=>t.includes('V I B E L A B')), 'legacy frames remain unchanged');
   await draw(scene('network',{count:23}));
   assert(texts.some(t=>t.includes('253 / 253')), '23 people should draw all 253 pairs');
   await draw(scene('network',{count:3,edges:[[0,1],[1,2]]}));

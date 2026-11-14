@@ -18,6 +18,25 @@ from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_scene_layout_frame_survives_validation_and_legacy_defaults(self):
+        scene={'heading':'标题','narration':'讲解。','key':'要点','visual':'question','spec':{'layout':{'frame':'cinematic'}}}
+        result=director.validate({'scenes':[scene]})['scenes'][0]
+        self.assertEqual(result['spec']['layout']['frame'],'cinematic')
+        self.assertEqual(director.validate({'scenes':[result]})['scenes'][0]['spec']['layout']['frame'],'cinematic')
+        scene['spec']['layout']={}
+        self.assertEqual(director.validate({'scenes':[scene]})['scenes'][0]['spec']['layout']['frame'],'standard')
+
+    def test_light_renderer_keeps_content_in_cinematic_frame(self):
+        from PIL import ImageChops
+        scene=director.validate(director.example())['scenes'][0]
+        with patch.object(render,'text_fit',wraps=render.text_fit) as text:
+            standard=render.frame(scene,0,4,2,5)
+            scene['spec']['layout']['frame']='cinematic'
+            cinematic=render.frame(scene,0,4,2,5)
+            self.assertIn(scene['heading'],[call.args[2] for call in text.call_args_list])
+        self.assertIsNotNone(ImageChops.difference(standard.crop((0,0,960,65)),cinematic.crop((0,0,960,65))).getbbox())
+        self.assertIsNone(ImageChops.difference(standard.crop((0,65,960,490)),cinematic.crop((0,65,960,490))).getbbox())
+
     def test_reference_palette_keeps_text_and_accents_legible_on_light_and_dark_frames(self):
         from app import style_library
         for colors in (['#f0f0f0','#f0d0a0','#e0e0e0'],['#101010','#303030','#d0a050']):
