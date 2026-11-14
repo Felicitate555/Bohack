@@ -18,6 +18,17 @@ from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_reference_palette_keeps_text_and_accents_legible_on_light_and_dark_frames(self):
+        from app import style_library
+        for colors in (['#f0f0f0','#f0d0a0','#e0e0e0'],['#101010','#303030','#d0a050']):
+            profile=style_library.profile_from_analysis({'colors':colors})
+            palette=profile['palette']
+            for background in ('background','surface','glow'):
+                self.assertGreaterEqual(style_library.contrast_ratio(palette['text'],palette[background]),4.5)
+                self.assertGreaterEqual(style_library.contrast_ratio(palette['accent'],palette[background]),4.5)
+                self.assertGreaterEqual(style_library.contrast_ratio(palette['muted'],palette[background]),4.5)
+            self.assertIn(colors[0],profile['media_prompt'])
+
     def test_profile_secondary_and_light_network_edges_are_configurable(self):
         custom=style_profile.normalize({'palette':{'accent':'#ff4400','secondary':'#22ddcc'}})
         self.assertEqual(custom['palette']['secondary'],'#22ddcc')

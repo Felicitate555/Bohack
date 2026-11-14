@@ -33,6 +33,25 @@ def summarize_frames(frames):
             'limitations':'本地稀疏抽帧仅估计颜色、亮度、画面变化、边缘分布和下方区域对比度；不能识别字幕、语义、真实镜头运动或完整风格。'}
 
 
+def contrast_ratio(first, second):
+    def luminance(color):
+        channels = [int(color[i:i+2],16)/255 for i in (1,3,5)]
+        linear = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in channels]
+        return .2126*linear[0]+.7152*linear[1]+.0722*linear[2]
+    a,b=sorted((luminance(first),luminance(second)))
+    return (b+.05)/(a+.05)
+
+
+def readable_accent(color, background, threshold):
+    rgb=[int(color[i:i+2],16) for i in (1,3,5)]
+    direction=0 if contrast_ratio('#000000',background)>contrast_ratio('#ffffff',background) else 255
+    for step in range(101):
+        adjusted=[round(v+(direction-v)*step/100) for v in rgb]
+        candidate='#%02x%02x%02x' % tuple(adjusted)
+        if contrast_ratio(candidate,background)>=threshold:return candidate
+    return '#000000' if direction==0 else '#ffffff'
+
+
 def profile_from_analysis(result):
     colors = result.get('colors') or []
     profile = style_profile.normalize()
@@ -45,6 +64,12 @@ def profile_from_analysis(result):
             factor = max(1, 180 / max(rgb))
             profile['palette']['accent'] = '#%02x%02x%02x' % tuple(min(255, round(v*factor)) for v in rgb)
         profile['palette']['surface'] = profile['palette']['background']
+        profile['palette']['glow'] = profile['palette']['background']
+        background = profile['palette']['background']
+        profile['palette']['text'] = readable_accent(profile['palette']['text'], background, 4.5)
+        profile['palette']['muted'] = readable_accent(profile['palette']['muted'], background, 4.5)
+        profile['palette']['accent'] = readable_accent(profile['palette']['accent'], background, 4.5)
+        profile['palette']['secondary'] = readable_accent(profile['palette']['secondary'], background, 4.5)
     profile['name'] = '参考视频风格'
     profile['direction'] = '依据本地参考视频的基础色彩调整，构图和具体叙事请按内容设计。'
     profile['media_prompt'] = 'cinematic documentary aesthetic, palette ' + ', '.join(colors[:4]) + ', coherent lighting, clear space for graphics, no text'
