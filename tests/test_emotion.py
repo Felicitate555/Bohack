@@ -92,6 +92,26 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertEqual(p['scenes'][0]['spec']['animation']['keyframes'],[.08,.8])
         self.assertEqual(p['scenes'][0]['visual'],'scattering')
 
+    def test_all_invalid_emotion_nodes_fall_back_without_losing_failure_details(self):
+        from app.agents import emotion_director
+        p=director.validate({'scenes':[self.scene()]})
+        result=emotion_director.build({'emotional_goal':'等待','beats':[{'scene_index':99,'execution':'delayed_reveal'}]},p['scenes'])
+        self.assertEqual(result['status'],'fallback')
+        self.assertFalse(result['beats'][0]['applied'])
+        self.assertIn('镜头',result['beats'][0]['actual'])
+
+    def test_invalid_emotion_scene_index_is_reported_and_not_applied(self):
+        from app.agents import emotion_director
+        p=director.validate({'scenes':[self.scene()]})
+        raw={'emotional_goal':'好奇','beats':[{'scene_index':4,'kind':'揭晓','execution':'delayed_reveal'},
+                                           {'scene_index':0,'kind':'期待','execution':'delayed_reveal'}]}
+        result=emotion_director.build(raw,p['scenes'])
+        self.assertEqual(len(result['beats']),2)
+        self.assertIsNone(result['beats'][0]['scene_index'])
+        self.assertFalse(result['beats'][0]['applied'])
+        self.assertIn('镜头',result['beats'][0]['actual'])
+        self.assertTrue(result['beats'][1]['applied'])
+
     def test_conflicting_beats_do_not_claim_both_timing_actions(self):
         from app.agents import emotion_director
         p=director.validate({'scenes':[self.scene()]})

@@ -12,13 +12,21 @@ def build(raw, scenes):
     result = {key:_text(raw.get(key), 240) for key in ('emotional_goal','audience_expectation','core_tension','payoff','arc')}
     result.update(status='generated', message='情绪计划由模型生成；应用状态仅说明引擎参数已设置，效果需审片。', beats=[])
     occupied = set()
+    if len(raw['beats']) > 16:
+        result['message'] += ' 超过 16 个节点的部分未应用。'
     for item in raw['beats'][:16]:
-        if not isinstance(item, dict): continue
+        if not isinstance(item, dict):
+            result['beats'].append({'scene_index':None,'kind':'','knowledge_goal':'','execution':'','applied':False,'actual':'未应用：情绪节点格式无效。'})
+            continue
         index=item.get('scene_index')
-        if isinstance(index,bool) or not isinstance(index,int) or not 0 <= index < len(scenes): continue
         execution=_text(item.get('execution'),60)
-        beat={'scene_index':index,'kind':_text(item.get('kind'),40),'knowledge_goal':_text(item.get('knowledge_goal')),
+        valid_index=not isinstance(index,bool) and isinstance(index,int) and 0 <= index < len(scenes)
+        beat={'scene_index':index if valid_index else None,'kind':_text(item.get('kind'),40),'knowledge_goal':_text(item.get('knowledge_goal')),
               'execution':execution,'applied':False,'actual':'未应用：当前引擎不支持该动作或镜头条件不满足。'}
+        if not valid_index:
+            beat['actual']='未应用：情绪节点的镜头编号无效。'
+            result['beats'].append(beat)
+            continue
         scene=scenes[index]
         if index in occupied:
             beat['actual']='未应用：此镜头已有情绪节奏动作，避免覆盖。'
@@ -51,6 +59,7 @@ def build(raw, scenes):
                 beat['actual'] += ' 请求的音效不受支持，未应用。'
             occupied.add(index)
         result['beats'].append(beat)
-    if not result['beats']:
-        return {'status':'fallback','message':'情绪节点无效，保留基础分镜；未应用额外情绪动作。','beats':[]}
+    if not any(beat['scene_index'] is not None for beat in result['beats']):
+        result['status']='fallback'
+        result['message']='情绪节点无有效镜头，保留基础分镜；未应用额外情绪动作。'
     return result
