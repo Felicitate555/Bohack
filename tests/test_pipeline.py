@@ -29,6 +29,17 @@ class PipelineTests(unittest.TestCase):
                 self.assertGreaterEqual(style_library.contrast_ratio(palette['muted'],palette[background]),4.5)
             self.assertIn(colors[0],profile['media_prompt'])
 
+    def test_invalid_percentages_are_not_silently_clamped(self):
+        scene={'heading':'比较','narration':'比较比例。','key':'比例','visual':'compare','spec':{'parameters':{'value':150,'secondary_value':-5}}}
+        result=director.validate({'scenes':[scene]})
+        params=result['scenes'][0]['spec']['parameters']
+        self.assertIsNone(params['value']);self.assertIsNone(params['secondary_value'])
+        self.assertTrue(director.visual_issues(result))
+        scene['spec']['parameters']['value']=50
+        secondary_only=director.validate({'scenes':[scene]})
+        self.assertTrue(director.visual_issues(secondary_only))
+        self.assertTrue(director.visual_issues(director.validate(secondary_only)))
+
     def test_profile_secondary_and_light_network_edges_are_configurable(self):
         custom=style_profile.normalize({'palette':{'accent':'#ff4400','secondary':'#22ddcc'}})
         self.assertEqual(custom['palette']['secondary'],'#22ddcc')

@@ -170,6 +170,8 @@ def visual_issues(plan):
                 issues.append(f"镜头 {i} 的区间查找需要 2 至 8 个严格递增数值和目标值")
         if scene["visual"] == "compare" and spec.get("parameters", {}).get("value") is None:
             issues.append(f"镜头 {i} 的比例图缺少百分比")
+        if scene["visual"] == "compare" and spec.get("parameters", {}).get("secondary_invalid"):
+            issues.append(f"镜头 {i} 的对比百分比须在 0 至 100 之间")
         if scene["visual"] == "growth" and any(spec.get("parameters", {}).get(k) is None for k in ("principal", "rate", "periods")):
             issues.append(f"镜头 {i} 的复利动画需要有效本金、每期增长率和整数期数")
         if scene["visual"] == "distinct":
