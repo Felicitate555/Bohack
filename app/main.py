@@ -401,7 +401,13 @@ def preview_scene(pid: str, index: int):
         try:
             single = {"scenes": [copy.deepcopy(scene)], "target_seconds": None, "style_profile": plan.get("style_profile")}
             duration = browser_render.render(single, project_dir(pid) / ("preview_" + preview_id), False, update)
-            plan["preview_job"].update({"status": "done", "duration": duration, "message": "镜头预览已完成"})
+            preview_warnings = []
+            for warning in single.get("warnings", []):
+                warning = warning.replace("镜头 1 ", f"镜头 {index+1} ", 1)
+                preview_warnings.append(warning)
+                if warning not in plan.setdefault("warnings", []): plan["warnings"].append(warning)
+            message = "镜头预览已完成；素材存在回退，请查看提示。" if preview_warnings else "镜头预览已完成"
+            plan["preview_job"].update({"status": "done", "duration": duration, "message": message, "warnings": preview_warnings})
         except Exception as exc:
             plan["preview_job"].update({"status": "error", "message": str(exc)[:400]})
         finally:

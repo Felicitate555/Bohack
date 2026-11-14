@@ -78,6 +78,17 @@ def usable_beats(timeline):
     return timeline.get("beats", []), timeline.get("strong_beats", [])
 
 
+def media_unavailable_warning(scene, index, source):
+    media = scene.get("spec", {}).get("media") or {}
+    if media.get("kind") not in {"image", "video"}:
+        return None
+    if not media.get("asset_id"):
+        return f"镜头 {index+1} 素材尚未生成，已使用程序动画。"
+    if source is not None and not source.is_file():
+        return f"镜头 {index+1} 素材文件不存在，已回退程序动画；请重置素材后重新生成。"
+    return None
+
+
 def render(project, outdir, voice, update, quality="preview", music=None, beat_timeline=None, music_volume=.18, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, previous_run=None, narration_mode="scene"):
     check_cancel = getattr(update, 'check_cancel', lambda: None)
     check_cancel()
@@ -198,9 +209,8 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                         project.setdefault("warnings", []).append(f"镜头 {i+1} 素材加载失败，已回退程序动画。")
                         page.evaluate("() => window.loadMedia('', '')")
                 else:
-                    if source and not source.is_file():
-                        warning = f"镜头 {i+1} 素材文件不存在，已回退程序动画；请重置素材后重新生成。"
-                        if warning not in project.setdefault("warnings", []): project["warnings"].append(warning)
+                    warning = media_unavailable_warning(scene, i, source)
+                    if warning and warning not in project.setdefault("warnings", []): project["warnings"].append(warning)
                     page.evaluate("() => window.loadMedia('', '')")
                 fingerprint = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
                 clip = outdir / f"scene_{i}.mp4"

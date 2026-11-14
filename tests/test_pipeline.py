@@ -732,6 +732,29 @@ class PipelineTests(unittest.TestCase):
             proc.kill.assert_called_once()
             self.assertFalse((root/('b'*12)/'video.mp4').exists())
 
+    def test_preview_without_generated_asset_identifies_fallback(self):
+        from app import browser_render
+        scene=director.validate(director.example())['scenes'][0]
+        scene['spec']['media'].update(kind='image',asset_id='')
+        self.assertIn('尚未生成',browser_render.media_unavailable_warning(scene,2,None))
+        scene['spec']['media']['kind']='animation'
+        self.assertIsNone(browser_render.media_unavailable_warning(scene,2,None))
+
+    def test_preview_reports_material_fallback_to_project_and_job(self):
+        class ImmediateThread:
+            def __init__(self,target,**kwargs):self.target=target
+            def start(self):self.target()
+        def preview(plan,outdir,*args,**kwargs):
+            plan.setdefault('warnings',[]).append('镜头 1 素材加载失败，已回退程序动画。')
+            return 4.0
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.object(main,'DATA',Path(folder)),patch.object(main.threading,'Thread',ImmediateThread),patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'render',side_effect=preview):
+            plan=main.create(main.Create(example=True))
+            main.preview_scene(plan['id'],0)
+            saved=main.read_project(plan['id'])
+            self.assertEqual(saved['preview_job']['status'],'done')
+            self.assertIn('素材',saved['preview_job']['message'])
+            self.assertTrue(any('素材加载失败' in w for w in saved['warnings']))
+
     def test_missing_local_asset_warns_and_is_not_cached(self):
         plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
         plan['scenes'][0]['spec']['media'].update(kind='image',asset_id='a'*32)
