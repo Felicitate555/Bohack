@@ -2,7 +2,22 @@
 import math
 import re
 
-TYPES = {"question", "dots", "network", "formula", "compare", "flow", "ending", "bars", "curve", "timeline", "geometry", "scattering", "divergence", "lorenz", "amplify", "contrast", "growth", "distinct"}
+TYPES = {"binary_search", "question", "dots", "network", "formula", "compare", "flow", "ending", "bars", "curve", "timeline", "geometry", "scattering", "divergence", "lorenz", "amplify", "contrast", "growth", "distinct"}
+
+
+def binary_search_steps(values, target):
+    if not 2 <= len(values) <= 8 or any(a >= b for a, b in zip(values, values[1:])) or target is None:
+        raise ValueError("请填写 2 至 8 个严格递增数值和查找目标。")
+    left, right, steps = 0, len(values)-1, []
+    while left <= right:
+        mid = (left + right) // 2
+        comparison = "equal" if values[mid] == target else "less" if values[mid] < target else "greater"
+        steps.append({"left":left,"right":right,"mid":mid,"value":values[mid],"comparison":comparison,"result":mid if comparison == "equal" else None})
+        if comparison == "equal": return steps
+        if comparison == "less": left = mid + 1
+        else: right = mid - 1
+    steps.append({"left":left,"right":right,"mid":None,"value":None,"comparison":"absent","result":-1})
+    return steps
 
 
 def distinct_probability(categories, draws):
@@ -140,6 +155,12 @@ def scene_spec(scene):
     elements = raw.get("elements") if isinstance(raw.get("elements"), list) else []
     elements = [{"label": str(e.get("label", ""))[:24], "value": number(e.get("value"), None, -10000, 10000)} for e in elements[:8] if isinstance(e, dict)]
     elements = [e for e in elements if e["value"] is not None]
+    search_invalid = p.get("search_invalid") is True
+    if visual == "binary_search":
+        original_elements = raw.get("elements")
+        search_invalid = search_invalid or not isinstance(original_elements, list) or not 2 <= len(original_elements) <= 8 or len(original_elements) != len(elements)
+        if isinstance(original_elements, list):
+            search_invalid = search_invalid or any(not isinstance(e, dict) or bounded(e.get("value"), -10000, 10000) is None for e in original_elements)
     count = int(number(p.get("count"), 2, 2, 60)) if p.get("count") not in (None, "") and number(p.get("count"), None, 2, 60) is not None else None
     edges, edges_invalid = relations(p.get("edges"), count)
     edges_invalid = edges_invalid or p.get("edges_invalid") is True
@@ -155,6 +176,6 @@ def scene_spec(scene):
         "transition": raw.get("transition") if raw.get("transition") in {"fade", "cut"} else "fade",
         "style": {"background": "#0b0b0f", "accent": "#d6b36a", "text": "#f5f1e8"},
         "media": {"kind": media.get("kind") if media.get("kind") in {"animation", "image", "video"} else "animation", "prompt": str(media.get("prompt") or "")[:1000], "asset_id": asset_id, "request_id": request_id, "submission_state": media.get("submission_state") if media.get("submission_state") in {"uncertain", "submitted"} else ""},
-        "parameters": {"categories": bounded(p.get("categories"), 2, 1000000, integer=True), "draws": bounded(p.get("draws"), 1, 60, integer=True), "optical_path": p.get("optical_path") if p.get("optical_path") in ("short", "long") else "short", "principal": bounded(p.get("principal"), .01, 1000000000), "rate": bounded(p.get("rate"), 0, 100), "periods": bounded(p.get("periods"), 1, 30, integer=True), "count": count, "edges": edges, "edges_invalid": edges_invalid, "sides": int(number(p.get("sides"), 3, 3, 8)), "value": number(p.get("value"), None, 0, 100) if p.get("value") not in (None, "") else None, "secondary_value": number(p.get("secondary_value"), None, 0, 100) if p.get("secondary_value") not in (None, "") else None, "formula": str(p.get("formula", scene.get("detail", "")))[:100], "labels": [str(x)[:24] for x in p.get("labels", [])[:8]] if isinstance(p.get("labels"), list) else [], "candidates": [str(x)[:20] for x in p.get("candidates", [])[:5]] if isinstance(p.get("candidates"), list) else []},
+        "parameters": {"search_invalid": search_invalid, "target": bounded(p.get("target"), -10000, 10000), "categories": bounded(p.get("categories"), 2, 1000000, integer=True), "draws": bounded(p.get("draws"), 1, 60, integer=True), "optical_path": p.get("optical_path") if p.get("optical_path") in ("short", "long") else "short", "principal": bounded(p.get("principal"), .01, 1000000000), "rate": bounded(p.get("rate"), 0, 100), "periods": bounded(p.get("periods"), 1, 30, integer=True), "count": count, "edges": edges, "edges_invalid": edges_invalid, "sides": int(number(p.get("sides"), 3, 3, 8)), "value": number(p.get("value"), None, 0, 100) if p.get("value") not in (None, "") else None, "secondary_value": number(p.get("secondary_value"), None, 0, 100) if p.get("secondary_value") not in (None, "") else None, "formula": str(p.get("formula", scene.get("detail", "")))[:100], "labels": [str(x)[:24] for x in p.get("labels", [])[:8]] if isinstance(p.get("labels"), list) else [], "candidates": [str(x)[:20] for x in p.get("candidates", [])[:5]] if isinstance(p.get("candidates"), list) else []},
         "assets": [], "timing": {"start": None, "end": None},
     }

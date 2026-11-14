@@ -161,6 +161,10 @@ def visual_issues(plan):
         spec = scene["spec"]
         if scene["visual"] in {"bars", "curve"} and (len(spec.get("elements", [])) < (2 if scene["visual"] == "curve" else 1) or any(e["value"] < 0 for e in spec.get("elements", []))):
             issues.append(f"镜头 {i} 的图表缺少足够的非负数据")
+        if scene["visual"] == "binary_search":
+            values = [e["value"] for e in spec.get("elements", [])]
+            if spec["parameters"].get("search_invalid") or not 2 <= len(values) <= 8 or any(a >= b for a,b in zip(values, values[1:])) or spec["parameters"].get("target") is None:
+                issues.append(f"镜头 {i} 的区间查找需要 2 至 8 个严格递增数值和目标值")
         if scene["visual"] == "compare" and spec.get("parameters", {}).get("value") is None:
             issues.append(f"镜头 {i} 的比例图缺少百分比")
         if scene["visual"] == "growth" and any(spec.get("parameters", {}).get(k) is None for k in ("principal", "rate", "periods")):

@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from .services import speech
 from .providers.siliconflow import ProviderError
-from .scene_spec import distinct_probability
+from .scene_spec import distinct_probability, binary_search_steps
 from . import style_profile, sound_effects
 
 W, H, FPS = 960, 540, 12
@@ -130,6 +130,28 @@ def frame(scene, index, count, t, duration, profile=None):
         styled_text(d, (95, 266), scene["detail"], 19, MUTED, 395)
         if visual == "network" and (scene.get("spec", {}).get("parameters") or {}).get("count"):
             d.text((95, 303), f"连线 {graph['shown']} / {len(graph['edges'])}", font=font(18, family), fill=GOLD)
+    elif visual == "binary_search":
+        values = [e["value"] for e in scene["spec"].get("elements", [])]
+        target = scene["spec"]["parameters"].get("target")
+        try:
+            if scene["spec"]["parameters"].get("search_invalid"): raise ValueError("invalid search values")
+            steps = binary_search_steps(values, target)
+        except ValueError:
+            styled_text(d, (480, 250), "请填写递增数列和查找目标", 22, MUTED, 800, "mm")
+        else:
+            step = steps[min(len(steps)-1, int(progress*len(steps)))]
+            styled_text(d, (480, 165), f"查找目标 {target:g}", 30, GOLD, 800, "mm")
+            width = min(86, 720/len(values)); left = (W-width*len(values))/2
+            for j,value in enumerate(values):
+                active = step["left"] <= j <= step["right"]; color = GOLD if j == step["mid"] else WHITE if active else MUTED
+                x = left+j*width
+                d.rounded_rectangle((x+4,215,x+width-4,275),radius=6,outline=color,width=3 if j==step["mid"] else 1)
+                styled_text(d,(x+width/2,245),f"{value:g}",24,color,width-12,"mm")
+                styled_text(d,(x+width/2,298),str(j+1),14,MUTED,width-8,"mm")
+            result = step["result"]
+            label = "未找到目标值" if result == -1 else f"找到：第 {result+1} 项" if result is not None else f"{step['value']:g} {'<' if step['comparison']=='less' else '>'} {target:g}，继续查找{'右半区' if step['comparison']=='less' else '左半区'}"
+            styled_text(d,(480,355),label,25,GOLD,820,"mm")
+            styled_text(d,(480,400),"已排除的区间逐步变暗",16,MUTED,820,"mm")
     elif visual == "compare":
         styled_text(d, (140, 185), scene["key"], 76, GOLD, 680)
         params = (scene.get("spec") or {}).get("parameters") or {}
@@ -186,7 +208,7 @@ def frame(scene, index, count, t, duration, profile=None):
         size = int(65 + 8 * progress)
         styled_text(d, (480, 242), scene["key"], size, GOLD, 800, "mm")
         d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
-    if visual not in {"formula", "distinct", "dots", "network"}:
+    if visual not in {"formula", "distinct", "dots", "network", "binary_search"}:
         styled_text(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
     # Sentence-level subtitle timing uses the actual scene duration.
     timing = scene.get("spec", {}).get("timing", {})

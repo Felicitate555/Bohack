@@ -37,7 +37,7 @@ def build(raw, scenes):
             animation['keyframes']=[.12,.85]
             animation['motion']='linear'
             beat.update(applied=True,actual='候选项从镜头 12% 开始变化，85% 完成；须人工检查标题、旁白和字幕是否提前揭晓。')
-        elif execution == 'progressive' and scene['visual'] in {'dots','network','distinct','flow','timeline','growth','bars','curve','scattering'}:
+        elif execution == 'progressive' and scene['visual'] in {'dots','network','distinct','flow','timeline','growth','bars','curve','scattering','binary_search'}:
             scene['spec']['animation']['keyframes']=[.08,.8]
             scene['spec']['animation']['motion']='smooth'
             beat.update(applied=True,actual='浏览器引擎通过现有组件逐步建立画面，镜头 80% 左右完成；轻量引擎支持范围较小。')

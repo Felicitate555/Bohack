@@ -21,6 +21,12 @@ function networkPositions(count,layout,motions,t,duration,beats){
  for(const m of motions){if(!points[m.node])continue;let dx=eventValue({...m,from:m.from_x,to:m.to_x},t,duration,beats),dy=eventValue({...m,from:m.from_y,to:m.to_y},t,duration,beats);points[m.node][0]=Math.max(50,Math.min(910,points[m.node][0]+dx));points[m.node][1]=Math.max(130,Math.min(420,points[m.node][1]+dy))}
  return points;
 }
+function binarySearchSteps(values,target){
+ if(values.length<2||values.length>8||target===null||target===undefined||values.some((v,i)=>!Number.isFinite(v)||(i&&v<=values[i-1])))return [];
+ let left=0,right=values.length-1,steps=[];
+ while(left<=right){let mid=Math.floor((left+right)/2),value=values[mid],comparison=value===target?'equal':value<target?'less':'greater';steps.push({left,right,mid,value,comparison,result:comparison==='equal'?mid:null});if(comparison==='equal')return steps;if(comparison==='less')left=mid+1;else right=mid-1}
+ steps.push({left,right,mid:null,value:null,comparison:'absent',result:-1});return steps;
+}
 function distinctProbability(categories,draws){
  let result=1;for(let i=0;i<draws;i++){if(i>=categories)return 0;result*=(categories-i)/categories}return result;
 }
@@ -52,6 +58,15 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
   let visible=Math.max(1,Math.ceil(p*count));
   let shown=0,total=0;if(type==='network'){let lines=(params.edges||[]).length?params.edges:[];if(!lines.length)for(let i=0;i<count;i++)for(let j=i+1;j<count;j++)lines.push([i,j]);total=lines.length;shown=Math.floor(p*total);x.strokeStyle='rgba(214,179,106,.13)';x.lineWidth=1;for(let k=0;k<shown;k++){let [a,b]=lines[k];x.beginPath();x.moveTo(...pts[a]);x.lineTo(...pts[b]);x.stroke()}visible=count}
   pts.slice(0,visible).forEach(([a,b])=>dot(a,b,3*pulse));text(s.key,95,240,60,gold,'left',380);text(s.detail,95,282,19,muted,'left',395);if(type==='network'&&params.count)text(`连线 ${shown} / ${total}`,95,320,18,gold);
+ }else if(type==='binary_search'){
+  let values=(spec.elements||[]).map(e=>e.value),target=params.target,steps=params.search_invalid?[]:binarySearchSteps(values,target);
+  if(!steps.length)text('请填写递增数列和查找目标',480,250,22,muted,'center');
+  else{let step=steps[Math.min(steps.length-1,Math.floor(p*steps.length))],width=Math.min(86,720/values.length),left=(960-width*values.length)/2;
+   text(`查找目标 ${target}`,480,165,30,gold,'center',800);
+   values.forEach((value,j)=>{let active=j>=step.left&&j<=step.right,px=left+j*width,color=j===step.mid?gold:active?warm:muted;x.globalAlpha=opacity*(active?1:.35);x.strokeStyle=color;x.lineWidth=j===step.mid?3:1;x.strokeRect(px+4,215,width-8,60);text(value,px+width/2,253,24,color,'center',width-12);text(j+1,px+width/2,302,14,muted,'center',width-8)});x.globalAlpha=opacity;
+   let label=step.result===-1?'未找到目标值':step.result!==null?`找到：第 ${step.result+1} 项`:`${step.value} ${step.comparison==='less'?'<':'>'} ${target}，继续查找${step.comparison==='less'?'右半区':'左半区'}`;
+   text(label,480,355,25,gold,'center',820);text('已排除的区间逐步变暗',480,400,16,muted,'center',820);
+  }
  }else if(type==='compare'){
   const value=params.value,secondary=params.secondary_value;
   text(s.key,100,220,67,gold);if(value!==null&&value!==undefined){let totalWidth=730;x.fillStyle='#353024';x.fillRect(110,288,totalWidth,22);x.fillStyle=gold;x.fillRect(110,288,totalWidth*value/100*p,22);text((params.labels||[])[0]||'',110,347,18,muted);text((params.labels||[])[1]||'',840,347,18,muted,'right');if(secondary!==null&&secondary!==undefined)text(Math.abs(value+secondary-100)<.15?`1 − ${secondary}% = ${value}%`:`${secondary}%   /   ${value}%`,840,260,26,warm,'right')}else text('请填写比例数值',110,310,20,muted);

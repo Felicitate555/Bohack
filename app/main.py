@@ -573,7 +573,7 @@ def start_render(pid: str, body: RenderRequest):
         raise HTTPException(400, "；".join(issues) + "。请使用 AI 优化对应镜头或选择其他视觉类型，再生成视频。")
     if body.voice and body.narration_mode == "sentence" and sum(len(speech.sentence_chunks(s["narration"])) for s in plan["scenes"]) > 32:
         raise HTTPException(400, "逐句配音最多 32 段，请缩短口播或选择整镜配音。")
-    light_visuals = {"question", "dots", "network", "formula", "compare", "flow", "ending", "distinct"}
+    light_visuals = {"binary_search", "question", "dots", "network", "formula", "compare", "flow", "ending", "distinct"}
     unsupported = [str(i + 1) for i, scene in enumerate(plan["scenes"]) if scene["visual"] not in light_visuals]
     if body.engine == "light" and unsupported:
         raise HTTPException(400, "轻量渲染暂不支持镜头 " + "、".join(unsupported) + " 的动效，请选择浏览器渲染器或修改这些镜头。")
