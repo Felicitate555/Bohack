@@ -18,6 +18,16 @@ from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_profile_secondary_and_light_network_edges_are_configurable(self):
+        custom=style_profile.normalize({'palette':{'accent':'#ff4400','secondary':'#22ddcc'}})
+        self.assertEqual(custom['palette']['secondary'],'#22ddcc')
+        scene=director.validate({'scenes':[{'heading':'节点','narration':'关系','key':'连接','visual':'network','spec':{'parameters':{'count':3}}}]})['scenes'][0]
+        with patch('PIL.ImageDraw.ImageDraw.line') as line:
+            render.frame(scene,0,1,4,4,custom)
+        edge_colors=[c.kwargs.get('fill') for c in line.call_args_list if len(c.args[0])==4 and c.kwargs.get('width')==1]
+        self.assertNotIn((91,77,51),edge_colors)
+
+
     def test_local_style_library_keeps_profiles_and_rejects_bad_ids(self):
         from app import style_library
         with tempfile.TemporaryDirectory(dir='data') as root:

@@ -58,6 +58,9 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   sandbox.window.setStyle({palette:{accent:'#ff4400',text:'#f5f1e8',muted:'#9d927c',background:'#08090b',surface:'#101010',glow:'#242015'}});
   colors=[];await draw(scene('question',{}));
   assert(colors.includes('#ff4400'), 'renderer must consume the selected accent');
+  sandbox.window.setStyle({palette:{accent:'#ff4400',secondary:'#22ddcc'}});
+  colors=[];await draw(scene('network',{count:3}));assert(colors.includes('rgba(255,68,0,0.13)'), 'network edges must follow accent');
+  colors=[];await draw(scene('growth',{principal:100,rate:10,periods:3}));assert(colors.includes('#22ddcc'), 'comparison series must use profile secondary color');
   sandbox.window.setStyle({});
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');

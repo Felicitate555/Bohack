@@ -99,6 +99,8 @@ def frame(scene, index, count, t, duration, profile=None):
     for x in range(0, W, 96):
         d.line((x, 0, x, H), fill=rgb(palette["surface"]))
     background = rgb(palette["background"])
+    def tint(amount):
+        return tuple(round(base * (1-amount) + accent * amount) for base, accent in zip(background, GOLD))
     grain = style["effects"]["grain"]
     dust = tuple(round(base * (1 - grain) + accent * grain) for base, accent in zip(background, GOLD))
     for i in range(54):
@@ -121,7 +123,7 @@ def frame(scene, index, count, t, duration, profile=None):
         pts = graph["points"]
         if visual == "network":
             for a, b in graph["edges"][:graph["shown"]]:
-                d.line((*pts[a], *pts[b]), fill=(91, 77, 51), width=1)
+                d.line((*pts[a], *pts[b]), fill=tint(.4), width=1)
         visible = len(pts) if visual == "network" else graph["visible"]
         for x, y in pts[:visible]:
             r = 3
@@ -156,7 +158,7 @@ def frame(scene, index, count, t, duration, profile=None):
         styled_text(d, (140, 185), scene["key"], 76, GOLD, 680)
         params = (scene.get("spec") or {}).get("parameters") or {}
         value = params.get("value")
-        d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=(60, 55, 45))
+        d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=tint(.22))
         ratio = value / 100 if value is not None else 0
         d.rounded_rectangle((145, 310, 145 + max(1, int(675 * progress * ratio)), 325), radius=7, fill=GOLD)
         if value is not None: styled_text(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
@@ -177,7 +179,7 @@ def frame(scene, index, count, t, duration, profile=None):
             styled_text(d, (100, 215), f"{prior*100:.2f}% × {max(0,categories-step+1)} / {categories}", 27, GOLD, 370)
             styled_text(d, (100, 275), f"全部不同 ≈ {prob*100:.2f}%", 24, GOLD, 370)
             styled_text(d, (100, 315), f"至少一次重复 ≈ {(1-prob)*100:.2f}%", 19, WHITE, 370)
-            d.line((540, 175, 540, 335, 840, 335), fill=(112, 98, 70), width=1)
+            d.line((540, 175, 540, 335, 840, 335), fill=tint(.5), width=1)
             points = [(540 + 300 * (i-1) / max(1, draws-1), 335 - distinct_probability(categories, i) * 160) for i in range(1, step+1)]
             if len(points) > 1: d.line(points, fill=GOLD, width=3)
             x, y = points[-1]; d.ellipse((x-4, y-4, x+4, y+4), fill=GOLD)
@@ -186,7 +188,7 @@ def frame(scene, index, count, t, duration, profile=None):
         params = (scene.get("spec") or {}).get("parameters") or {}
         labels = (params.get("labels") or ["01", "02", "03"])[:5]
         left, right, y = 170, 790, 255
-        d.line((left, y, left + (right-left) * progress, y), fill=(142, 120, 77), width=2)
+        d.line((left, y, left + (right-left) * progress, y), fill=tint(.65), width=2)
         for i, label in enumerate(labels):
             x = left + (right-left) * i / max(1, len(labels)-1)
             if progress >= i / max(1, len(labels)-1):
@@ -203,11 +205,11 @@ def frame(scene, index, count, t, duration, profile=None):
             choice = min(len(candidates)-1, int(progress*len(candidates))) if candidates else 0
         shown = candidates[choice] if candidates else scene["key"]
         styled_text(d, (480, 242), shown, 70, GOLD, 800, "mm")
-        d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
+        d.line((350, 314, 610, 314), fill=tint(.42), width=1)
     else:
         size = int(65 + 8 * progress)
         styled_text(d, (480, 242), scene["key"], size, GOLD, 800, "mm")
-        d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
+        d.line((350, 314, 610, 314), fill=tint(.42), width=1)
     if visual not in {"formula", "distinct", "dots", "network", "binary_search"}:
         styled_text(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
     # Sentence-level subtitle timing uses the actual scene duration.

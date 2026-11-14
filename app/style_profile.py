@@ -9,7 +9,7 @@ DEFAULT = {
     "id": "black-gold-documentary",
     "name": "黑金知识纪录片",
     "palette": {"background": "#08090b", "surface": "#101010", "glow": "#242015",
-                "accent": "#d6b36a", "text": "#f5f1e8", "muted": "#9d927c"},
+                "accent": "#d6b36a", "secondary": "#83b8dc", "text": "#f5f1e8", "muted": "#9d927c"},
     "typography": {"family": "serif", "number_family": "serif", "title_size": 30, "subtitle_size": 21},
     "layout": {"subtitle_y": 470, "safe_margin": .05},
     "effects": {"grain": .10, "vignette": .36, "media_opacity": .60, "media_overlay": .25, "camera_push": .015},
