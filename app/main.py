@@ -396,7 +396,9 @@ def review_scene(pid: str, index: int):
             frame = folder / f"review_{i}.jpg"
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(preview["duration"]*fraction), "-i", str(folder / "video.mp4"), "-frames:v", "1", "-vf", "scale=640:-2", str(frame)], check=True, timeout=30, capture_output=True)
             frames.append(frame)
-        result, usage = visual_reviewer.review(scene, frames, profile=plan.get("style_profile"))
+        emotion = plan.get("emotion_plan") or {}
+        beats = [b for b in emotion.get("beats", []) if isinstance(b, dict) and b.get("scene_index") == index] if emotion.get("status") == "generated" else []
+        result, usage = visual_reviewer.review(scene, frames, profile=plan.get("style_profile"), emotion_beats=beats)
     except (ValueError, subprocess.SubprocessError) as exc:
         raise HTTPException(400, "审片失败，请检查网络、模型权限和预览视频。") from exc
     plan.setdefault("reviews", {})[str(index)] = result

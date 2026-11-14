@@ -35,6 +35,18 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertTrue(result['beats'][0]['applied'])
         self.assertFalse(result['beats'][1]['applied'])
 
+    @patch('app.providers.siliconflow.image_data_url', return_value='data:image/jpeg;base64,AA==')
+    @patch('app.providers.siliconflow.chat')
+    def test_visual_review_receives_intent_without_claiming_emotion_detection(self, chat, image):
+        from app.agents import visual_reviewer
+        chat.return_value=('{}', {'role':'reviewer'})
+        beat={'kind':'期待','knowledge_goal':'解释不同波长','execution':'progressive','applied':True}
+        visual_reviewer.review(self.scene(),[Path('frame.jpg')], emotion_beats=[beat])
+        prompt=chat.call_args.args[1][0]['content'][0]['text']
+        self.assertIn('解释不同波长',prompt)
+        self.assertIn('不能',prompt)
+        self.assertIn('静帧',prompt)
+
     def test_light_renderer_obeys_reveal_timing(self):
         from app import render
         from app.agents import emotion_director
