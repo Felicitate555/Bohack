@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import director, render, browser_render, audio
+from . import director, render, browser_render, audio, style_profile
 from .providers import model_registry, siliconflow
 from .services import media_assets
 from .agents import visual_reviewer, animation_builder
@@ -42,6 +42,7 @@ class Create(BaseModel):
     example: bool = False
     target_seconds: int | None = None
     creative_mode: str = "smart"
+    style_profile: dict | None = None
 
 
 class RenderRequest(BaseModel):
@@ -153,12 +154,12 @@ def create(body: Create):
         if not topic:
             raise HTTPException(400, "先输入一个想制作的主题。")
         try:
-            plan, usage = director.generate(topic, body.target_seconds, body.creative_mode)
+            plan, usage = director.generate(topic, body.target_seconds, body.creative_mode, profile=body.style_profile)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         mode = "ai"
     pid = str(uuid.uuid4())
-    plan.update({"id": pid, "mode": mode, "creative_mode": body.creative_mode, "usage": usage, "usage_events": usage if isinstance(usage, list) else [], "job": None, "target_seconds": body.target_seconds})
+    plan.update({"id": pid, "mode": mode, "creative_mode": body.creative_mode, "usage": usage, "usage_events": usage if isinstance(usage, list) else [], "job": None, "target_seconds": body.target_seconds, "style_profile": style_profile.normalize(body.style_profile)})
     save(pid, plan)
     return plan
 
@@ -176,7 +177,7 @@ def start_planning(body: Create):
         raise HTTPException(400, "请先在 .env 中配置 SILICONFLOW_API_KEY，或选择零密钥示例。")
     pid = str(uuid.uuid4())
     plan = {"id": pid, "title": topic[:80], "topic": topic, "scenes": [], "mode": "ai", "creative_mode": body.creative_mode,
-            "target_seconds": body.target_seconds, "job": None, "usage_events": [],
+            "target_seconds": body.target_seconds, "job": None, "usage_events": [], "style_profile": style_profile.normalize(body.style_profile),
             "planning_job": {"status": "running", "message": "正在准备创作"}}
     return launch_planning(pid, plan)
 
@@ -205,9 +206,9 @@ def launch_planning(pid, plan):
                 save(pid, plan)
             try:
                 if isinstance(plan.get("knowledge_script"), dict):
-                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint, initial_script=plan["knowledge_script"])
+                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint, initial_script=plan["knowledge_script"], profile=plan.get("style_profile"))
                 else:
-                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint)
+                    result, usage = director.generate(topic, seconds, mode, progress, checkpoint, profile=plan.get("style_profile"))
                 plan.update(result)
                 plan["usage"] = usage
                 plan["usage_events"] = old_events + (usage if isinstance(usage, list) else [])
@@ -285,8 +286,8 @@ def improve_scene(pid: str, index: int, body: SceneEdit):
     if (plan.get("job") or {}).get("status") == "running" or (plan.get("preview_job") or {}).get("status") == "running":
         raise HTTPException(409, "渲染中无法修改镜头。")
     try:
-        revised, usage = animation_builder.improve(scene, body.instruction)
-        validated = director.validate({"title": plan["title"], "topic": plan["topic"], "scenes": [revised]})["scenes"][0]
+        revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"))
+        validated = director.validate({"title": plan["title"], "topic": plan["topic"], "scenes": [revised], "style_profile": plan.get("style_profile")})["scenes"][0]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     # Preserve the existing local media; model output never selects file paths.
@@ -319,7 +320,7 @@ def preview_scene(pid: str, index: int):
             plan["preview_job"]["message"] = message
             save(pid, plan)
         try:
-            single = {"scenes": [copy.deepcopy(scene)], "target_seconds": None}
+            single = {"scenes": [copy.deepcopy(scene)], "target_seconds": None, "style_profile": plan.get("style_profile")}
             duration = browser_render.render(single, project_dir(pid) / ("preview_" + preview_id), False, update)
             plan["preview_job"].update({"status": "done", "duration": duration, "message": "镜头预览已完成"})
         except Exception as exc:
@@ -355,7 +356,7 @@ def review_scene(pid: str, index: int):
             frame = folder / f"review_{i}.jpg"
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(preview["duration"]*fraction), "-i", str(folder / "video.mp4"), "-frames:v", "1", "-vf", "scale=640:-2", str(frame)], check=True, timeout=30, capture_output=True)
             frames.append(frame)
-        result, usage = visual_reviewer.review(scene, frames)
+        result, usage = visual_reviewer.review(scene, frames, profile=plan.get("style_profile"))
     except (ValueError, subprocess.SubprocessError) as exc:
         raise HTTPException(400, "审片失败，请检查网络、模型权限和预览视频。") from exc
     plan.setdefault("reviews", {})[str(index)] = result
@@ -372,19 +373,23 @@ def update_project(pid: str, body: dict):
     if (old.get("job") or {}).get("status") == "running" or (old.get("preview_job") or {}).get("status") == "running":
         raise HTTPException(409, "渲染中无法修改，请等待完成。")
     try:
-        plan = director.validate(body)
+        plan = director.validate({**body, "style_profile": body.get("style_profile", old.get("style_profile"))})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     job = old.get("job")
     if job and job.get("status") == "done":
         job["stale"] = True
     plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
+    plan["style_profile"] = style_profile.normalize(body.get("style_profile", old.get("style_profile")))
+    if style_profile.normalize(old.get("style_profile")) != plan["style_profile"] and any((s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
+        notice = "风格已更改，已有素材仍沿用原文件；如需新风格，请在对应镜头主动重置素材后重新生成。"
+        if notice not in plan["warnings"]: plan["warnings"].append(notice)
     plan["preview_job"] = old.get("preview_job")
     plan["reviews"] = old.get("reviews", {})
     plan["planning_job"] = old.get("planning_job")
     preview = plan.get("preview_job") or {}
     i = preview.get("index")
-    if preview.get("status") == "done" and isinstance(i, int) and (i >= len(plan["scenes"]) or director.validate(old)["scenes"][i] != plan["scenes"][i]):
+    if preview.get("status") == "done" and isinstance(i, int) and (style_profile.normalize(old.get("style_profile")) != plan["style_profile"] or i >= len(plan["scenes"]) or director.validate(old)["scenes"][i] != plan["scenes"][i]):
         preview["status"] = "stale"
     save(pid, plan)
     return plan

@@ -1,8 +1,9 @@
 from ..providers import siliconflow
 from .creative_brief import PRODUCTION_PRINCIPLES
+from .. import style_profile
 
 
-def write(topic, duration=None):
+def write(topic, duration=None, profile=None):
     instruction = PRODUCTION_PRINCIPLES + """
 你的职责是编剧与内容策划，给后续导演提供可用的创作蓝图；不输出代码。
 先明确受众和需要记住的结论，设计有吸引力但不夸大事实的开场；把复杂内容拆成循序渐进的解释，指出常见误解、必要前提、直观例子、关键数值和最终收束。故事类主题则根据其内容设计人物、冲突和变化，不要伪装成知识课程。
@@ -12,5 +13,6 @@ def write(topic, duration=None):
 """
     if duration:
         instruction += f"\n目标成片约 {duration} 秒，叙述量应与时长相协调。"
+    instruction += "\n" + style_profile.director_context(profile)
     text, usage = siliconflow.chat("writer", [{"role": "system", "content": instruction}, {"role": "user", "content": topic}], max_tokens=3500)
     return siliconflow.parse_json(text), usage

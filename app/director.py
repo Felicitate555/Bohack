@@ -9,6 +9,7 @@ from .providers import siliconflow
 from .agents import knowledge_writer, animation_builder
 from .agents.creative_brief import DIRECTOR_INSTRUCTIONS
 from .services import media_router
+from . import style_profile
 
 ROOT = Path(__file__).resolve().parent.parent
 VISUALS = TYPES
@@ -18,12 +19,12 @@ def example():
     return json.loads((ROOT / "examples" / "birthday.json").read_text(encoding="utf-8"))
 
 
-def generate(topic: str, target_seconds=None, mode="smart", progress=lambda message: None, checkpoint=lambda plan, events: None, initial_script=None):
+def generate(topic: str, target_seconds=None, mode="smart", progress=lambda message: None, checkpoint=lambda plan, events: None, initial_script=None, profile=None):
     legacy_key = os.getenv("LLM_API_KEY", "").strip()
     legacy_model = os.getenv("LLM_MODEL", "").strip()
     if not siliconflow.api_key() and not (legacy_key and legacy_model):
         raise ValueError("请先在 .env 中配置 SILICONFLOW_API_KEY，或选择零密钥示例。")
-    system = DIRECTOR_INSTRUCTIONS
+    system = DIRECTOR_INSTRUCTIONS + "\n" + style_profile.director_context(profile)
     if target_seconds:
         system += f"\n用户选择的目标成片约 {target_seconds} 秒。写与该时长相称的有效口播，不要通过重复或空话凑时长。"
         if target_seconds >= 90:
@@ -39,6 +40,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             body = response.json()
             obj = siliconflow.parse_json(body["choices"][0]["message"]["content"])
             obj["topic"] = topic
+            obj["style_profile"] = profile
             result = validate(obj)
             return result, [{"role":"legacy", "model":legacy_model, "usage":body.get("usage", {})}]
         if mode == "fast":
@@ -50,7 +52,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             else:
                 progress("正在编写内容和解释逻辑")
                 try:
-                    script, event = knowledge_writer.write(topic, target_seconds)
+                    script, event = knowledge_writer.write(topic, target_seconds, profile=profile)
                 except ValueError as exc:
                     raise ValueError(f"编剧阶段失败：{exc}") from exc
                 records.append(event)
@@ -67,6 +69,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
         try:
             obj = siliconflow.parse_json(raw)
             obj["topic"] = topic
+            obj["style_profile"] = profile
             result = validate(obj)
         except ValueError as exc:
             raise ValueError(f"{'旗舰导演' if mode == 'director' else '视觉导演'}返回的分镜不可用：{exc}") from exc
@@ -83,6 +86,7 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
             records.append(event)
             obj = siliconflow.parse_json(raw)
             obj["topic"] = topic
+            obj["style_profile"] = profile
             result = validate(obj)
             issues = visual_issues(result)
             if issues:
@@ -92,9 +96,9 @@ def generate(topic: str, target_seconds=None, mode="smart", progress=lambda mess
         if mode == "director":
             try:
                 progress("正在优化动画设计；基础分镜已保存")
-                refined, event = animation_builder.improve_plan(topic, result["scenes"])
+                refined, event = animation_builder.improve_plan(topic, result["scenes"], profile=profile)
                 records.append(event)
-                candidate = validate({"title": result["title"], "topic": topic, "scenes": refined.get("scenes")})
+                candidate = validate({"title": result["title"], "topic": topic, "scenes": refined.get("scenes"), "style_profile": profile})
                 if len(candidate["scenes"]) != len(result["scenes"]) or visual_issues(candidate):
                     raise ValueError("动画规划的镜头数量或图表参数无效")
                 for old, new in zip(result["scenes"], candidate["scenes"]):
@@ -118,6 +122,8 @@ def validate(obj):
         raise ValueError("分镜应为 1 至 16 个镜头。")
     title = str(obj.get("title", "未命名作品"))[:80]
     topic = str(obj.get("topic", ""))[:500]
+    profile = style_profile.normalize(obj.get("style_profile"))
+    palette = profile["palette"]
     scenes = []
     for s in obj["scenes"]:
         if not isinstance(s, dict):
@@ -131,6 +137,13 @@ def validate(obj):
             scene["key"] = scene["heading"][:20]
         scene["visual"] = resolve_visual(s)
         scene["spec"] = scene_spec({**s, **scene})
+        scene["spec"]["style"] = {key: palette[key] for key in ("background", "accent", "text")}
+        raw_spec = s.get("spec") if isinstance(s.get("spec"), dict) else {}
+        raw_animation = raw_spec.get("animation") if isinstance(raw_spec.get("animation"), dict) else {}
+        if raw_spec.get("transition") not in ("fade", "cut"):
+            scene["spec"]["transition"] = profile["motion"]["default_transition"]
+        if "beat_binding" not in raw_animation:
+            scene["spec"]["animation"]["beat_binding"] = profile["motion"]["beat_emphasis"]
         scenes.append(scene)
     return {"title": title, "topic": topic, "scenes": scenes}
 

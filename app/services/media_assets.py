@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image
 from ..providers import siliconflow
 from ..providers.model_registry import model
+from .. import style_profile
 
 
 def prepare(plan, directory, update, persist):
@@ -30,6 +31,7 @@ def prepare(plan, directory, update, persist):
         asset_id = uuid.uuid4().hex
         event = None
         target = asset_dir / (asset_id + (".mp4" if kind == "video" else ".png"))
+        styled_prompt = style_profile.media_prompt(media["prompt"], plan.get("style_profile"))
         update(f"正在制作镜头 {idx+1} 的{'图片' if kind == 'image' else '视频'}素材")
         try:
             if kind == "image":
@@ -37,7 +39,7 @@ def prepare(plan, directory, update, persist):
                 event = {"role": "image", "model": model(image_role), "status": "submitted"}
                 media["submission_state"] = "uncertain"
                 plan.setdefault("usage_events", []).append(event); persist()
-                url = siliconflow.image(media["prompt"], role=image_role)
+                url = siliconflow.image(styled_prompt, role=image_role)
                 siliconflow.download(url, target, 30*1024*1024)
                 with Image.open(target) as img:
                     if img.width * img.height > 20_000_000:
@@ -49,7 +51,7 @@ def prepare(plan, directory, update, persist):
                 if not request_id:
                     media["submission_state"] = "uncertain"
                     persist()
-                    request_id = siliconflow.video_submit(media["prompt"], 5)
+                    request_id = siliconflow.video_submit(styled_prompt, 5)
                     media["request_id"] = request_id
                     media["submission_state"] = "submitted"
                     event = {"role": "video", "model": model("video"), "seconds": 5, "status": "submitted", "request_id": request_id}

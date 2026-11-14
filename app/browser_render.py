@@ -12,6 +12,7 @@ from pathlib import Path
 from .render import run, split_text, stamp, caption_ranges, RenderCancelled
 from .services import speech
 from .providers.siliconflow import ProviderError
+from . import style_profile
 
 
 def browser_path():
@@ -76,6 +77,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     fps = 30 if quality == "full" else 15
     w, h = (1920, 1080) if quality == "full" else (960, 540)
     scene_html = (Path(__file__).parent / "scene_canvas.html").read_text(encoding="utf-8")
+    profile = style_profile.normalize(project.get("style_profile"))
     renderer_fingerprint = hashlib.sha256(scene_html.encode("utf-8")).hexdigest()
     outdir.mkdir(parents=True, exist_ok=True)
     scenes = project["scenes"]
@@ -123,6 +125,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
         try:
             page = browser.new_page(viewport={"width": w, "height": h}, device_scale_factor=1)
             page.set_content(scene_html, wait_until="load")
+            page.evaluate("style => window.setStyle(style)", profile)
             page.evaluate("document.fonts.ready")
             for i, scene in enumerate(scenes):
                 update(f"正在制作镜头 {i+1}/{len(scenes)}：{scene['heading']}")
@@ -140,7 +143,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 scene["spec"]["timing"] = {"start": round(elapsed, 3), "end": round(elapsed+duration, 3), "speech_duration": round(speech_duration, 3)}
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
-                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed]}
+                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed]}
                 fingerprint = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
                 old = old_scenes[i] if i < len(old_scenes) else {}
                 prior_clip = previous_dir / f"scene_{i}.mp4" if previous_dir else None

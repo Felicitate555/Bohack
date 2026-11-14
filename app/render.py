@@ -2,6 +2,7 @@
 import asyncio
 import math
 import os
+import re
 import shutil
 import subprocess
 from functools import lru_cache
@@ -11,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .services import speech
 from .providers.siliconflow import ProviderError
 from .scene_spec import distinct_probability
+from . import style_profile
 
 W, H, FPS = 960, 540, 12
 GOLD = (219, 185, 120)
@@ -22,20 +24,23 @@ class RenderCancelled(Exception):
     """A user-requested cooperative render stop."""
 
 
-@lru_cache(maxsize=32)
-def font(size):
-    candidates = [os.getenv("VIBELAB_FONT", ""), "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "C:/Windows/Fonts/msyh.ttc", "/System/Library/Fonts/PingFang.ttc"]
+@lru_cache(maxsize=64)
+def font(size, family="serif"):
+    serif = ["/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "C:/Windows/Fonts/simsun.ttc"]
+    sans = ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "C:/Windows/Fonts/msyh.ttc", "/System/Library/Fonts/PingFang.ttc"]
+    candidates = [os.getenv("VIBELAB_FONT", "")] + (sans + serif if family == "sans" else serif + sans)
     for path in candidates:
         if path and Path(path).exists():
-            return ImageFont.truetype(path, size)
+            try: return ImageFont.truetype(path, size)
+            except OSError: continue
     raise RuntimeError("未找到中文字体，请设置 VIBELAB_FONT。")
 
 
-def text_fit(draw, xy, value, size, color, max_width, anchor=None):
+def text_fit(draw, xy, value, size, color, max_width, anchor=None, family="serif"):
     value = str(value)
-    while size > 13 and draw.textbbox((0, 0), value, font=font(size))[2] > max_width:
+    while size > 13 and draw.textbbox((0, 0), value, font=font(size, family))[2] > max_width:
         size -= 1
-    draw.text(xy, value, font=font(size), fill=color, anchor=anchor)
+    draw.text(xy, value, font=font(size, family), fill=color, anchor=anchor)
 
 
 def split_text(value, width=27):
@@ -78,19 +83,31 @@ def network_geometry(scene, t, duration):
     return {"points": points, "edges": edges, "shown": math.floor(p * len(edges)), "visible": max(1, math.ceil(p * count))}
 
 
-def frame(scene, index, count, t, duration):
-    im = Image.new("RGB", (W, H), (11, 11, 12))
+def frame(scene, index, count, t, duration, profile=None):
+    style = style_profile.normalize(profile)
+    palette, typography = style["palette"], style["typography"]
+    def rgb(value): return tuple(int(value[i:i+2], 16) for i in (1, 3, 5))
+    GOLD, WHITE, MUTED = (rgb(palette[key]) for key in ("accent", "text", "muted"))
+    family = typography["family"]
+    margin = round(W * style["layout"]["safe_margin"])
+    def styled_text(*args, **kwargs):
+        number = re.fullmatch(r"[\d\s.,%+−×÷=≈/\-]+", str(args[2])) is not None
+        return text_fit(*args, **kwargs, family=typography["number_family"] if number else family)
+    im = Image.new("RGB", (W, H), rgb(palette["background"]))
     d = ImageDraw.Draw(im)
     # Subtle fixed grid and particles preserve the restrained reference aesthetic.
     for x in range(0, W, 96):
-        d.line((x, 0, x, H), fill=(18, 18, 18))
+        d.line((x, 0, x, H), fill=rgb(palette["surface"]))
+    background = rgb(palette["background"])
+    grain = style["effects"]["grain"]
+    dust = tuple(round(base * (1 - grain) + accent * grain) for base, accent in zip(background, GOLD))
     for i in range(54):
         x = (i * 157 + 83) % W
         y = (i * 83 + 41) % 420
-        d.ellipse((x, y, x + 1, y + 1), fill=(55, 49, 37))
-    d.text((48, 28), f"{index + 1:02}  /  {count:02}     V I B E L A B", font=font(14), fill=MUTED)
-    d.line((48, 54, 912, 54), fill=(79, 69, 51), width=1)
-    text_fit(d, (48, 77), scene["heading"], 32, WHITE, 820)
+        d.ellipse((x, y, x + 1, y + 1), fill=dust)
+    d.text((margin, 28), f"{index + 1:02}  /  {count:02}     V I B E L A B", font=font(14, family), fill=MUTED)
+    d.line((margin, 54, W-margin, 54), fill=MUTED, width=1)
+    styled_text(d, (margin, 77), scene["heading"], typography["title_size"], WHITE, W-margin*2)
     progress = min(1.0, max(0.0, t / max(1, duration * .6)))
     visual = scene["visual"]
     if visual in ("dots", "network"):
@@ -103,40 +120,40 @@ def frame(scene, index, count, t, duration):
         for x, y in pts[:visible]:
             r = 3
             d.ellipse((x-r, y-r, x+r, y+r), fill=GOLD)
-        text_fit(d, (95, 190), scene["key"], 60, GOLD, 380)
-        text_fit(d, (95, 266), scene["detail"], 19, MUTED, 395)
+        styled_text(d, (95, 190), scene["key"], 60, GOLD, 380)
+        styled_text(d, (95, 266), scene["detail"], 19, MUTED, 395)
         if visual == "network" and (scene.get("spec", {}).get("parameters") or {}).get("count"):
-            d.text((95, 303), f"连线 {graph['shown']} / {len(graph['edges'])}", font=font(18), fill=GOLD)
+            d.text((95, 303), f"连线 {graph['shown']} / {len(graph['edges'])}", font=font(18, family), fill=GOLD)
     elif visual == "compare":
-        text_fit(d, (140, 185), scene["key"], 76, GOLD, 680)
+        styled_text(d, (140, 185), scene["key"], 76, GOLD, 680)
         params = (scene.get("spec") or {}).get("parameters") or {}
         value = params.get("value")
         d.rounded_rectangle((145, 310, 820, 325), radius=7, fill=(60, 55, 45))
         ratio = value / 100 if value is not None else 0
         d.rounded_rectangle((145, 310, 145 + max(1, int(675 * progress * ratio)), 325), radius=7, fill=GOLD)
-        if value is not None: text_fit(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
+        if value is not None: styled_text(d, (145, 270), f"{value:g}%", 20, WHITE, 260)
     elif visual == "formula":
-        text_fit(d, (92, 175), scene["detail"], 32, WHITE, 780)
+        styled_text(d, (92, 175), scene["detail"], 32, WHITE, 780)
         d.line((95, 253, 95 + int(700 * progress), 253), fill=GOLD, width=2)
-        text_fit(d, (95, 285), scene["key"], 57, GOLD, 730)
+        styled_text(d, (95, 285), scene["key"], 57, GOLD, 730)
     elif visual == "distinct":
         params = (scene.get("spec") or {}).get("parameters") or {}
         categories, draws = params.get("categories"), params.get("draws")
         if not categories or not draws or draws > categories + 1:
-            text_fit(d, (100, 220), "请填写有效的类别数和抽取次数", 24, WHITE, 760)
+            styled_text(d, (100, 220), "请填写有效的类别数和抽取次数", 24, WHITE, 760)
         else:
             step = min(draws, max(1, int(progress * draws) + 1))
             prob, prior = distinct_probability(categories, step), distinct_probability(categories, step - 1)
-            text_fit(d, (100, 137), f"类别 {categories} · 抽取 {draws} 次", 18, MUTED, 370)
-            text_fit(d, (100, 181), f"前 {step-1} 次均不同 × 第 {step} 次仍不同", 16, WHITE, 370)
-            text_fit(d, (100, 215), f"{prior*100:.2f}% × {max(0,categories-step+1)} / {categories}", 27, GOLD, 370)
-            text_fit(d, (100, 275), f"全部不同 ≈ {prob*100:.2f}%", 24, GOLD, 370)
-            text_fit(d, (100, 315), f"至少一次重复 ≈ {(1-prob)*100:.2f}%", 19, WHITE, 370)
+            styled_text(d, (100, 137), f"类别 {categories} · 抽取 {draws} 次", 18, MUTED, 370)
+            styled_text(d, (100, 181), f"前 {step-1} 次均不同 × 第 {step} 次仍不同", 16, WHITE, 370)
+            styled_text(d, (100, 215), f"{prior*100:.2f}% × {max(0,categories-step+1)} / {categories}", 27, GOLD, 370)
+            styled_text(d, (100, 275), f"全部不同 ≈ {prob*100:.2f}%", 24, GOLD, 370)
+            styled_text(d, (100, 315), f"至少一次重复 ≈ {(1-prob)*100:.2f}%", 19, WHITE, 370)
             d.line((540, 175, 540, 335, 840, 335), fill=(112, 98, 70), width=1)
             points = [(540 + 300 * (i-1) / max(1, draws-1), 335 - distinct_probability(categories, i) * 160) for i in range(1, step+1)]
             if len(points) > 1: d.line(points, fill=GOLD, width=3)
             x, y = points[-1]; d.ellipse((x-4, y-4, x+4, y+4), fill=GOLD)
-            text_fit(d, (100, 395), "独立、等概率抽取（允许重复）", 13, MUTED, 760)
+            styled_text(d, (100, 395), "独立、等概率抽取（允许重复）", 13, MUTED, 760)
     elif visual == "flow":
         params = (scene.get("spec") or {}).get("parameters") or {}
         labels = (params.get("labels") or ["01", "02", "03"])[:5]
@@ -146,26 +163,26 @@ def frame(scene, index, count, t, duration):
             x = left + (right-left) * i / max(1, len(labels)-1)
             if progress >= i / max(1, len(labels)-1):
                 d.ellipse((x-7, y-7, x+7, y+7), fill=GOLD)
-                text_fit(d, (x, 305), label, 17, WHITE, 125, "mm")
-        text_fit(d, (480, 180), scene["key"], 43, GOLD, 700, "mm")
+                styled_text(d, (x, 305), label, 17, WHITE, 125, "mm")
+        styled_text(d, (480, 180), scene["key"], 43, GOLD, 700, "mm")
     elif visual == "question":
         params = (scene.get("spec") or {}).get("parameters") or {}
         candidates = params.get("candidates") or []
         shown = candidates[min(len(candidates)-1, int(progress*len(candidates)))] if candidates else scene["key"]
-        text_fit(d, (480, 242), shown, 70, GOLD, 800, "mm")
+        styled_text(d, (480, 242), shown, 70, GOLD, 800, "mm")
         d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
     else:
         size = int(65 + 8 * progress)
-        text_fit(d, (480, 242), scene["key"], size, GOLD, 800, "mm")
+        styled_text(d, (480, 242), scene["key"], size, GOLD, 800, "mm")
         d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
     if visual not in {"formula", "distinct", "dots", "network"}:
-        text_fit(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
+        styled_text(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
     # Sentence-level subtitle timing uses the actual scene duration.
     lines = split_text(scene["narration"])
     speech_duration = scene.get("spec", {}).get("timing", {}).get("speech_duration", duration)
     caption = next((part for part, (start, end) in zip(lines, caption_ranges(lines, duration, speech_duration)) if start <= t < end), lines[-1])
-    text_fit(d, (480, 463), caption, 22, WHITE, 850, "mm")
-    d.line((48, 510, 48 + int(864 * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
+    styled_text(d, (480, style["layout"]["subtitle_y"]-7), caption, typography["subtitle_size"], WHITE, W-margin*2, "mm")
+    d.line((margin, 510, margin + int((W-margin*2) * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
     return im
 
 
@@ -199,6 +216,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         raise RuntimeError("未找到 FFmpeg/FFprobe，请安装后重试。")
     outdir.mkdir(parents=True, exist_ok=True)
     scenes = project["scenes"]
+    profile = style_profile.normalize(project.get("style_profile"))
     voice_durations = []
     if voice:
         try:
@@ -232,7 +250,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         try:
             for f in range(frames):
                 check_cancel()
-                proc.stdin.write(frame(scene, i, len(scenes), f/FPS, duration).tobytes())
+                proc.stdin.write(frame(scene, i, len(scenes), f/FPS, duration, profile).tobytes())
             proc.stdin.close()
             err = proc.stderr.read()
             if proc.wait() != 0:

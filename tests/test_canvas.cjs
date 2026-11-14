@@ -2,12 +2,12 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('app/scene_canvas.html', 'utf8');
 const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
-let texts = [], lines = 0, endpoints = [];
+let texts = [], lines = 0, endpoints = [], colors = [];
 const ctx = new Proxy({
   createRadialGradient(){return {addColorStop(){}}},
   fillText(value){texts.push(String(value))},
   lineTo(a,b){lines++;endpoints.push([a,b])},
-}, {get(o,k){return k in o ? o[k] : ()=>{}},set(o,k,v){o[k]=v;return true}});
+}, {get(o,k){return k in o ? o[k] : ()=>{}},set(o,k,v){if(k==='fillStyle'||k==='strokeStyle')colors.push(v);o[k]=v;return true}});
 const sandbox = {document:{querySelector(){return {getContext(){return ctx}}}},window:{},Math};
 vm.runInNewContext(script, sandbox);
 function scene(visual, parameters){return {heading:'测试',key:'重点',detail:'说明',narration:'一句解释。',visual,spec:{parameters,animation:{keyframes:[0,.65]}}}}
@@ -52,6 +52,10 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   await draw(scene('distinct',{categories:365,draws:23}));
   assert(texts.some(t=>t.includes('49.27%')) && texts.some(t=>t.includes('50.73%')), 'show both calculated probabilities');
   assert(texts.some(t=>t.includes('独立')&&t.includes('等概率')), 'show the probability assumptions');
+  sandbox.window.setStyle({palette:{accent:'#ff4400',text:'#f5f1e8',muted:'#9d927c',background:'#08090b',surface:'#101010',glow:'#242015'}});
+  colors=[];await draw(scene('question',{}));
+  assert(colors.includes('#ff4400'), 'renderer must consume the selected accent');
+  sandbox.window.setStyle({});
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');
   console.log('Network, scattering, growth and beat-bound event checks passed.');

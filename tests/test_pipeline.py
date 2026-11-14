@@ -14,10 +14,63 @@ from PIL import Image
 from app import director
 from app.providers import siliconflow
 from app.services import media_assets
-from app import browser_render, main, audio, render, scene_spec
+from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_style_profile_survives_project_edit_and_drives_render_colors(self):
+        custom = style_profile.normalize({'name':'测试风格','palette':{'background':'#102030','accent':'#ff4400'}})
+        self.assertEqual(custom['palette']['background'], '#102030')
+        self.assertEqual(style_profile.normalize({'palette':{'accent':'not-a-color'}})['palette']['accent'], style_profile.DEFAULT['palette']['accent'])
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)):
+            plan = main.create(main.Create(example=True))
+            plan['preview_job'] = {'status':'done', 'index':0, 'id':'a'*12}
+            main.save(plan['id'], plan)
+            plan['style_profile'] = custom
+            updated = main.update_project(plan['id'], plan)
+            self.assertEqual(updated['style_profile']['palette']['accent'], '#ff4400')
+            self.assertEqual(updated['scenes'][0]['spec']['style']['accent'], '#ff4400')
+            self.assertEqual(updated['preview_job']['status'], 'stale')
+            scene = updated['scenes'][0]
+            image = render.frame(scene, 0, 1, 2, 4, custom)
+            self.assertEqual(image.getpixel((1, 1)), (16, 32, 48))
+            updated['scenes'][0]['spec']['media'].update({'kind':'image','asset_id':'a'*32})
+            updated = main.update_project(plan['id'], updated)
+            updated['style_profile']['palette']['accent'] = '#00aabb'
+            updated = main.update_project(plan['id'], updated)
+            self.assertEqual(updated['scenes'][0]['spec']['media']['asset_id'], 'a'*32)
+            self.assertTrue(any('已有素材' in warning for warning in updated['warnings']))
+
+    @patch.dict('os.environ', {'SILICONFLOW_API_KEY':'test-only'})
+    @patch('app.providers.siliconflow.chat')
+    def test_style_profile_is_in_director_prompt(self, chat):
+        chat.return_value = (json.dumps({'title':'测试','scenes':[{'heading':'主题','narration':'解释','key':'重点','visual':'question'}]}, ensure_ascii=False), {'role':'writer'})
+        custom = style_profile.normalize({'name':'自定义测试','palette':{'accent':'#ff4400'}})
+        director.generate('主题', mode='fast', profile=custom)
+        prompt = chat.call_args.args[1][0]['content']
+        self.assertIn('自定义测试', prompt)
+        self.assertIn('#ff4400', prompt)
+
+    def test_profile_sets_scene_defaults_without_overriding_explicit_choices(self):
+        profile = style_profile.normalize({'motion':{'default_transition':'cut','beat_emphasis':False}})
+        scene = {'heading':'测试','narration':'解释','key':'重点','visual':'question'}
+        result = director.validate({'scenes':[scene], 'style_profile':profile})['scenes'][0]['spec']
+        self.assertEqual(result['transition'], 'cut')
+        self.assertFalse(result['animation']['beat_binding'])
+        scene['spec']={'transition':'fade','animation':{'beat_binding':True}}
+        result = director.validate({'scenes':[scene], 'style_profile':profile})['scenes'][0]['spec']
+        self.assertEqual(result['transition'], 'fade')
+        self.assertTrue(result['animation']['beat_binding'])
+
+    def test_media_prompt_uses_project_style_without_replacing_scene_request(self):
+        scene = {'spec': {'media': {'kind':'image','prompt':'a brass telescope','asset_id':'','request_id':'','submission_state':''}}}
+        plan = {'creative_mode':'smart', 'scenes':[scene], 'style_profile':style_profile.normalize({'media_prompt':'warm copper and teal'})}
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(siliconflow, 'image', return_value='https://example.test/a') as image, patch.object(siliconflow, 'download', side_effect=lambda url, path, *a: Image.new('RGB',(4,4)).save(path,format='PNG')):
+            media_assets.prepare(plan, Path(root), lambda s:None, lambda:None)
+        prompt = image.call_args.args[0]
+        self.assertIn('a brass telescope', prompt)
+        self.assertIn('warm copper and teal', prompt)
+
     def test_distinct_probability_requires_valid_assumptions(self):
         scene = {'heading':'不重复概率', 'narration':'逐次抽取', 'key':'概率', 'visual':'distinct',
                  'spec':{'parameters':{'categories':365,'draws':23}}}
@@ -317,7 +370,7 @@ class PipelineTests(unittest.TestCase):
     def test_background_planning_exposes_state_while_worker_runs(self):
         started, proceed, finished = threading.Event(), threading.Event(), threading.Event()
         original_save = main.save
-        def generate(topic, seconds, mode, progress, checkpoint):
+        def generate(topic, seconds, mode, progress, checkpoint, profile=None):
             progress('测试阶段')
             started.set()
             if not proceed.wait(3): raise RuntimeError('测试等待超时')
@@ -422,7 +475,7 @@ class PipelineTests(unittest.TestCase):
         class ImmediateThread:
             def __init__(self, target, **kwargs): self.target = target
             def start(self): self.target()
-        def generator(topic, seconds, mode, progress, checkpoint):
+        def generator(topic, seconds, mode, progress, checkpoint, profile=None):
             partial = director.validate(director.example())
             checkpoint(partial, [{'role': 'director'}])
             raise ValueError('动画规划中断')
@@ -444,7 +497,7 @@ class PipelineTests(unittest.TestCase):
             def __init__(self, target, **kwargs): self.target = target
             def start(self): self.target()
         script = {'title': '已经保存的稿'}
-        def generate(topic, seconds, mode, progress, checkpoint, initial_script=None):
+        def generate(topic, seconds, mode, progress, checkpoint, initial_script=None, profile=None):
             self.assertEqual(initial_script, script)
             return director.validate(director.example()), [{'role': 'director'}]
         with tempfile.TemporaryDirectory(dir='data') as root, patch.object(main, 'DATA', Path(root)), patch.object(main.threading, 'Thread', ImmediateThread), patch.object(director, 'generate', side_effect=generate):
@@ -572,6 +625,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(popen.call_count, 1)
             browser_render.render(plan, Path(root)/('b'*12), False, lambda s:None, previous_run=first)
             self.assertEqual(popen.call_count, 1)
+            plan['style_profile'] = {'palette':{'accent':'#ff4400'}}
+            browser_render.render(plan, Path(root)/('c'*12), False, lambda s:None, previous_run=first)
+            self.assertEqual(popen.call_count, 2, 'style change must invalidate rendered frames')
 
     @patch.dict('os.environ', {'SILICONFLOW_API_KEY': 'test-only'})
     @patch('app.providers.siliconflow.requests.post')
