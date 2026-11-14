@@ -13,11 +13,78 @@ from PIL import Image
 
 from app import director
 from app.providers import siliconflow
-from app.services import media_assets
+from app.services import media_assets, speech
 from app import browser_render, main, audio, render, scene_spec, style_profile
 
 
 class PipelineTests(unittest.TestCase):
+    def test_sentence_speech_uses_measured_lengths_and_bounds_calls(self):
+        import numpy as np
+        calls = []
+        def fake_create(scenes, outdir, provider, voice, speed, update, report, indices=None):
+            calls.append(scenes[0]['narration'])
+            duration = .4 if len(calls) == 1 else .9
+            with wave.open(str(outdir / 'voice_0.mp3'), 'wb') as f:
+                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                f.writeframes(np.zeros(round(16000*duration), dtype='<i2').tobytes())
+        scenes = [{'narration':'第一句。第二句。'}]
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(speech, 'create', side_effect=fake_create):
+            root = Path(root)
+            speech.create_segmented(scenes, root, 'edge', 'anna', 1, lambda s:None, lambda e:None)
+            cues = json.loads((root/'voice_0.cues.json').read_text(encoding='utf-8'))
+            self.assertEqual(calls, ['第一句。','第二句。'])
+            self.assertAlmostEqual(cues[0]['end'], .4, delta=.01)
+            self.assertAlmostEqual(cues[1]['start'], .55, delta=.01)
+            self.assertAlmostEqual(cues[1]['end'], 1.45, delta=.02)
+            self.assertTrue((root/'voice_0.mp3').is_file())
+            self.assertEqual(speech.read_cues(root/'voice_0.cues.json', scenes[0]['narration'], 2), cues)
+            with self.assertRaises(ValueError):
+                speech.read_cues(root/'voice_0.cues.json', '不同文本。', 2)
+        self.assertGreater(len(speech.sentence_chunks('短句。' * 33)), 32)
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(speech, 'create') as create:
+            with self.assertRaisesRegex(ValueError, '最多 32 段'):
+                speech.create_segmented([{'narration':'短句。' * 33}], Path(root), 'edge', 'anna', 1, lambda s:None, lambda e:None)
+            create.assert_not_called()
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.object(speech, 'create', side_effect=fake_create):
+            speech.create_segmented([{'narration':'单句。'}], Path(root), 'edge', 'anna', 1, lambda s:None, lambda e:None)
+            self.assertTrue((Path(root)/'voice_0.mp3').is_file())
+
+    def test_measured_caption_cues_control_srt_and_hold_between_sentences(self):
+        cues = [{'text':'短句。','start':0,'end':.4}, {'text':'较长的第二句。','start':.55,'end':1.45}]
+        result = list(render.caption_timeline('短句。较长的第二句。', 2, 1.45, cues))
+        self.assertEqual(result, [('短句。', 0, .55), ('较长的第二句。', .55, 2)])
+
+    def test_edge_voice_does_not_silently_replace_an_unsupported_choice(self):
+        module=types.ModuleType('edge_tts')
+        class FakeCommunication:
+            def __init__(self,*args,**kwargs): pass
+            async def save(self,path): Path(path).write_bytes(b'fake')
+        module.Communicate=FakeCommunication
+        with tempfile.TemporaryDirectory(dir='data') as root, patch.dict(sys.modules, {'edge_tts':module}):
+            with self.assertRaises(siliconflow.ProviderError):
+                speech.create([{'narration':'测试'}],Path(root),'edge','bella',1,lambda s:None,lambda e:None)
+
+    def test_failed_sentence_speech_reuses_completed_segment_on_retry(self):
+        import numpy as np
+        calls = []
+        def fake_create(scenes, outdir, provider, voice, speed, update, report, indices=None):
+            calls.append(scenes[0]['narration'])
+            if len(calls) == 2: raise ValueError('temporary failure')
+            with wave.open(str(outdir / 'voice_0.mp3'), 'wb') as f:
+                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                f.writeframes(np.zeros(8000, dtype='<i2').tobytes())
+        with tempfile.TemporaryDirectory(dir='data') as folder, patch.object(speech, 'create', side_effect=fake_create):
+            root=Path(folder); first=root/'first'; second=root/'second'; first.mkdir(); second.mkdir()
+            scenes=[{'narration':'第一句。第二句。'}]
+            with self.assertRaises(ValueError):
+                speech.create_segmented(scenes, first, 'edge', 'anna', 1, lambda s:None, lambda e:None, cache_dir=root/'cache')
+            speech.create_segmented(scenes, second, 'edge', 'anna', 1, lambda s:None, lambda e:None, cache_dir=root/'cache')
+            self.assertEqual(calls, ['第一句。','第二句。','第二句。'])
+        with patch.object(speech, 'model', side_effect=['model-A','model-B']):
+            first_key=speech.voice_cache_key('文字','siliconflow','anna',1,'sentence')
+            second_key=speech.voice_cache_key('文字','siliconflow','anna',1,'sentence')
+            self.assertNotEqual(first_key,second_key)
+
     def test_style_profile_survives_project_edit_and_drives_render_colors(self):
         custom = style_profile.normalize({'name':'测试风格','palette':{'background':'#102030','accent':'#ff4400'}})
         self.assertEqual(custom['palette']['background'], '#102030')
@@ -197,7 +264,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_cancel_render_waits_for_worker_and_preserves_last_video(self):
         started, proceed = threading.Event(), threading.Event()
-        def renderer(plan, outdir, voice, update, *args):
+        def renderer(plan, outdir, voice, update, *args, **kwargs):
             started.set()
             if not proceed.wait(5): raise RuntimeError('test timeout')
             update.check_cancel()
@@ -326,7 +393,7 @@ class PipelineTests(unittest.TestCase):
             def __init__(self, target, **kwargs): self.target = target
             def start(self): self.target()
         calls = []
-        def renderer(plan, outdir, *args):
+        def renderer(plan, outdir, *args, **kwargs):
             calls.append(args[-1])
             if len(calls) == 2:
                 self.assertTrue(Path(main.export(plan['id'], 'mp4').path).is_file())
@@ -352,7 +419,7 @@ class PipelineTests(unittest.TestCase):
         class ImmediateThread:
             def __init__(self, target, **kwargs): self.target = target
             def start(self): self.target()
-        def render_mock(plan, outdir, *args):
+        def render_mock(plan, outdir, *args, **kwargs):
             outdir.mkdir(parents=True, exist_ok=True)
             (outdir / 'video.mp4').write_bytes(b'video')
             (outdir / 'subtitles.srt').write_text('subtitle', encoding='utf-8')
@@ -583,6 +650,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(args[0], '/audio/speech')
         self.assertEqual(args[1]['voice'], 'FunAudioLLM/CosyVoice2-0.5B:anna')
         self.assertTrue(kwargs['binary'])
+
+    @patch('app.providers.siliconflow.post', return_value=b'audio')
+    @patch('app.providers.siliconflow.model', return_value='FunAudioLLM/CosyVoice2-0.5B')
+    def test_cosyvoice_receives_documentary_instruction_as_control(self, model, post):
+        siliconflow.speech('正文。','claire',1.0,instruction='自然、清晰地讲解。')
+        self.assertEqual(post.call_args.args[1]['input'], '自然、清晰地讲解。<|endofprompt|>正文。')
 
     @patch('app.providers.siliconflow.post', return_value=b'audio')
     def test_moss_narration_has_speaker_tag(self, post):

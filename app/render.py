@@ -178,9 +178,10 @@ def frame(scene, index, count, t, duration, profile=None):
     if visual not in {"formula", "distinct", "dots", "network"}:
         styled_text(d, (480, 360), scene["detail"], 20, MUTED, 800, "mm")
     # Sentence-level subtitle timing uses the actual scene duration.
-    lines = split_text(scene["narration"])
-    speech_duration = scene.get("spec", {}).get("timing", {}).get("speech_duration", duration)
-    caption = next((part for part, (start, end) in zip(lines, caption_ranges(lines, duration, speech_duration)) if start <= t < end), lines[-1])
+    timing = scene.get("spec", {}).get("timing", {})
+    speech_duration = timing.get("speech_duration", duration)
+    captions = list(caption_timeline(scene["narration"], duration, speech_duration, timing.get("caption_cues")))
+    caption = next((part for part, start, end in captions if start <= t < end), captions[-1][0] if captions else "")
     styled_text(d, (480, style["layout"]["subtitle_y"]-7), caption, typography["subtitle_size"], WHITE, W-margin*2, "mm")
     d.line((margin, 510, margin + int((W-margin*2) * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
     return im
@@ -209,7 +210,18 @@ def caption_ranges(parts, duration, speech_duration):
         yield start, end
 
 
-def render(project, outdir, voice, update, target_seconds=None, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None):
+def caption_timeline(text, duration, speech_duration, cues=None):
+    if cues:
+        for i, cue in enumerate(cues):
+            end = cues[i+1]['start'] if i+1 < len(cues) else duration
+            yield cue['text'], cue['start'], min(duration, end)
+    else:
+        parts = split_text(text)
+        for part, (start, end) in zip(parts, caption_ranges(parts, duration, speech_duration)):
+            yield part, start, end
+
+
+def render(project, outdir, voice, update, target_seconds=None, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, narration_mode="scene"):
     check_cancel = getattr(update, 'check_cancel', lambda: None)
     check_cancel()
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -217,16 +229,26 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
     outdir.mkdir(parents=True, exist_ok=True)
     scenes = project["scenes"]
     profile = style_profile.normalize(project.get("style_profile"))
-    voice_durations = []
+    instruction = speech.narration_instruction(voice_provider, profile) if voice else None
+    voice_durations, voice_cues = [], []
     if voice:
         try:
-            speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report)
+            if narration_mode == "sentence":
+                speech.create_segmented(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, cache_dir=outdir.parent / "speech_cache", instruction=instruction)
+            else:
+                if instruction:
+                    speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, instruction=instruction)
+                else:
+                    speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report)
             for i in range(len(scenes)):
                 result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(outdir / f"voice_{i}.mp3")], capture_output=True, text=True, check=True, timeout=20)
                 voice_durations.append(float(result.stdout.strip()))
+                voice_cues.append(speech.read_cues(outdir / f"voice_{i}.cues.json", scenes[i]["narration"], voice_durations[-1]) if narration_mode == "sentence" else None)
         except RenderCancelled:
             raise
         except ProviderError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             raise RuntimeError("配音生成或音频解析失败。请检查所选配音服务的网络连接和 FFprobe，或更换配音服务。") from exc
@@ -241,6 +263,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         duration = frames / FPS
         speech_duration = min(duration, voice_durations[i]) if voice else duration
         scene.setdefault("spec", {})["timing"] = {"start": round(elapsed, 3), "end": round(elapsed + duration, 3), "speech_duration": round(speech_duration, 3)}
+        if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
         clip = outdir / f"scene_{i}.mp4"
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "pipe:0"]
         if voice:
@@ -260,8 +283,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             proc.wait()
             raise
         clips.append(clip)
-        parts = split_text(scene["narration"])
-        for part, (a, b) in zip(parts, caption_ranges(parts, duration, speech_duration)):
+        for part, a, b in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None):
             a, b = elapsed + a, elapsed + b
             captions.append(f"{len(captions)+1}\n{stamp(a)} --> {stamp(b)}\n{part}\n")
         elapsed += duration

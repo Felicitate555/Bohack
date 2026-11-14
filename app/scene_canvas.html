@@ -28,6 +28,7 @@ function text(s,px,py,size,color=warm,align='left',max=840){x.fillStyle=color;x.
 function dot(px,py,r,color=gold){x.fillStyle=color;x.shadowColor=gold;x.shadowBlur=16;x.beginPath();x.arc(px,py,r,0,Math.PI*2);x.fill();x.shadowBlur=0}
 function captions(value){let lines=[];while(value){let part=value.slice(0,27);if(value.length>27){let cut=Math.max(...Array.from('，。！？；、').map(c=>part.lastIndexOf(c)));if(cut>13)part=value.slice(0,cut+1)}lines.push(part);value=value.slice(part.length)}return lines}
 function captionAt(chunks,t,duration){if(!chunks.length)return '';let weights=chunks.map(v=>Math.max(1,Array.from(v.trim()).length)),goal=clamp(t/Math.max(.1,duration))*weights.reduce((a,b)=>a+b,0),sum=0;for(let i=0;i<chunks.length;i++){sum+=weights[i];if(goal<sum)return chunks[i]}return chunks[chunks.length-1]}
+function captionForTime(narration,t,duration,cues){if(Array.isArray(cues)&&cues.length){let current=cues[0];for(const cue of cues){if(t<cue.start)break;current=cue}return current.text}return captionAt(captions(narration||''),t,duration)}
 function makeLorenz(){
  const deriv=([a,b,c])=>[10*(b-a),a*(28-c)-b,a*b-(8/3)*c],step=.01,out=[];
  let v=[1,1,1];for(let i=0;i<4500;i++){let k1=deriv(v),k2=deriv(v.map((n,j)=>n+k1[j]*step/2)),k3=deriv(v.map((n,j)=>n+k2[j]*step/2)),k4=deriv(v.map((n,j)=>n+k3[j]*step));v=v.map((n,j)=>n+step*(k1[j]+2*k2[j]+2*k3[j]+k4[j])/6);if(i>100&&i%2===0)out.push([v[0],v[2]])}return out;
@@ -116,7 +117,7 @@ function draw(s,index,total,t,duration,beats,strongBeats,w,h){
  }else if(type==='flow'||type==='timeline'){
   let labels=(params.labels||[]).length?params.labels:['01','02','03'];labels=labels.slice(0,5);let left=170,right=790,y=260;x.strokeStyle='#8e784d';x.lineWidth=2;x.beginPath();x.moveTo(left,y);x.lineTo(left+(right-left)*p,y);x.stroke();labels.forEach((l,i)=>{let px=left+(right-left)*i/Math.max(1,labels.length-1);if(p>=i/Math.max(1,labels.length-1)){dot(px,y,7*pulse);text(l,px,310,17,warm,'center',130)}});text(s.key,480,190,47,gold,'center',750);text(s.detail,480,367,19,muted,'center',800);
  }else {let candidates=params.candidates||[];let shown=type==='question'&&candidates.length?candidates[Math.min(candidates.length-1,Math.floor(p*candidates.length))]:s.key;text(shown,480,270,76*pulse,gold,'center',800);x.strokeStyle='#806d48';x.beginPath();x.moveTo(330,308);x.lineTo(630,308);x.stroke();text(s.detail,480,350,19,muted,'center',800)}
- x.restore();let chunks=captions(s.narration||''),speechDuration=spec.timing?.speech_duration||duration;text(captionAt(chunks,t,speechDuration),480,activeStyle.layout.subtitle_y,activeStyle.typography.subtitle_size,warm,'center',960-margin*2);
+ x.restore();let speechDuration=spec.timing?.speech_duration||duration;text(captionForTime(s.narration||'',t,speechDuration,spec.timing?.caption_cues),480,activeStyle.layout.subtitle_y,activeStyle.typography.subtitle_size,warm,'center',960-margin*2);
  x.fillStyle=gold;x.fillRect(margin,510,(960-margin*2)*((index+clamp(t/duration))/total),2);
  if(spec.transition==='fade'){let opacity=Math.max(0,1-Math.min(t/.35,(duration-t)/.35,1));x.fillStyle=`rgba(0,0,0,${opacity})`;x.fillRect(0,0,960,540)}
 }

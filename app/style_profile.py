@@ -17,6 +17,7 @@ DEFAULT = {
     "direction": "克制黑金、暖白文字、哑光金属、细线与环境光；镜头逐步建立关系，留白清楚，字幕避开主体。",
     "media_prompt": "restrained black and champagne gold documentary aesthetic, matte metal, low-key cinematic light, subtle dust and grain, clear space for graphics, no text, no watermark",
     "sound_direction": "自然中文知识纪录片叙述；音乐让位于旁白，节奏跟随内容，不强行卡点。",
+    "narration_instruction": "用平静、清楚、自然的中文讲解。",
 }
 
 
@@ -25,7 +26,7 @@ def normalize(raw=None):
     result = copy.deepcopy(DEFAULT)
     if not isinstance(raw, dict):
         return result
-    for key, limit in (("id", 80), ("name", 80), ("direction", 400), ("media_prompt", 500), ("sound_direction", 300)):
+    for key, limit in (("id", 80), ("name", 80), ("direction", 400), ("media_prompt", 500), ("sound_direction", 300), ("narration_instruction", 160)):
         if isinstance(raw.get(key), str) and raw[key].strip():
             result[key] = raw[key].strip()[:limit]
     palette = raw.get("palette") if isinstance(raw.get("palette"), dict) else {}

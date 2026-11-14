@@ -158,12 +158,19 @@ def parse_json(content):
     return data
 
 
-def speech(text, voice="anna", speed=1.0, role="speech"):
+def speech_input(text, ident, instruction=None):
+    if ident == "fnlp/MOSS-TTSD-v0.5" and not re.match(r"^\s*\[S[12]\]", text):
+        text = "[S1]" + text
+    if ident == "FunAudioLLM/CosyVoice2-0.5B" and instruction:
+        text = str(instruction).strip()[:160] + "<|endofprompt|>" + text
+    return text
+
+
+def speech(text, voice="anna", speed=1.0, role="speech", instruction=None):
     ident = model(role)
     if voice not in {"alex", "benjamin", "charles", "david", "anna", "bella", "claire", "diana"}:
         raise ProviderError("不支持该预设音色。")
-    if ident == "fnlp/MOSS-TTSD-v0.5" and not re.match(r"^\s*\[S[12]\]", text):
-        text = "[S1]" + text
+    text = speech_input(text, ident, instruction)
     return post("/audio/speech", {"model": ident, "input": text, "voice": f"{ident}:{voice}", "response_format": "mp3", "speed": max(.5, min(2, float(speed))), "stream": False}, binary=True)
 
 

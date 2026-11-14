@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .render import run, split_text, stamp, caption_ranges, RenderCancelled
+from .render import run, stamp, caption_timeline, RenderCancelled
 from .services import speech
 from .providers.siliconflow import ProviderError
 from . import style_profile
@@ -68,7 +68,7 @@ def usable_beats(timeline):
     return timeline.get("beats", []), timeline.get("strong_beats", [])
 
 
-def render(project, outdir, voice, update, quality="preview", music=None, beat_timeline=None, music_volume=.18, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, previous_run=None):
+def render(project, outdir, voice, update, quality="preview", music=None, beat_timeline=None, music_volume=.18, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, previous_run=None, narration_mode="scene"):
     check_cancel = getattr(update, 'check_cancel', lambda: None)
     check_cancel()
     if not available():
@@ -78,6 +78,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     w, h = (1920, 1080) if quality == "full" else (960, 540)
     scene_html = (Path(__file__).parent / "scene_canvas.html").read_text(encoding="utf-8")
     profile = style_profile.normalize(project.get("style_profile"))
+    instruction = speech.narration_instruction(voice_provider, profile) if voice else None
     renderer_fingerprint = hashlib.sha256(scene_html.encode("utf-8")).hexdigest()
     outdir.mkdir(parents=True, exist_ok=True)
     scenes = project["scenes"]
@@ -94,27 +95,45 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     beats, strong_beats = usable_beats(beat_timeline)
     # The synchronous Playwright API runs an event loop in this thread. Produce
     # narration beforehand so asyncio.run() never nests inside that loop.
-    voice_durations = []
+    voice_durations, voice_cues = [], []
     if voice:
         try:
             pending = []
             for i, scene in enumerate(scenes):
                 old = old_scenes[i] if i < len(old_scenes) else {}
-                voice_key = [scene["narration"], voice_provider, voice_name, voice_speed]
+                voice_key = speech.voice_cache_key(scene["narration"], voice_provider, voice_name, voice_speed, narration_mode, instruction)
                 source = previous_dir / f"voice_{i}.mp3" if previous_dir else None
-                if old.get("voice_key") == voice_key and source and source.is_file():
+                cue_source = previous_dir / f"voice_{i}.cues.json" if previous_dir else None
+                valid_cues = True
+                if narration_mode == "sentence":
+                    if cue_source is None:
+                        valid_cues = False
+                    else:
+                        try: speech.read_cues(cue_source, scene["narration"])
+                        except ValueError: valid_cues = False
+                if old.get("voice_key") == voice_key and source and source.is_file() and valid_cues:
                     shutil.copyfile(source, outdir / f"voice_{i}.mp3")
+                    if narration_mode == "sentence": shutil.copyfile(cue_source, outdir / f"voice_{i}.cues.json")
                 else:
                     pending.append(i)
             if pending:
-                speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, pending)
+                if narration_mode == "sentence":
+                    speech.create_segmented(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, pending, cache_dir=outdir.parent / "speech_cache", instruction=instruction)
+                else:
+                    if instruction:
+                        speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, pending, instruction=instruction)
+                    else:
+                        speech.create(scenes, outdir, voice_provider, voice_name, voice_speed, update, report, pending)
             check_cancel()
             for i in range(len(scenes)):
                 info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(outdir / f"voice_{i}.mp3")], capture_output=True, text=True, check=True, timeout=20)
                 voice_durations.append(float(info.stdout.strip()))
+                voice_cues.append(speech.read_cues(outdir / f"voice_{i}.cues.json", scenes[i]["narration"], voice_durations[-1]) if narration_mode == "sentence" else None)
         except RenderCancelled:
             raise
         except ProviderError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             raise RuntimeError("配音生成或音频解析失败。请检查所选配音服务的网络连接和 FFprobe，或更换配音服务。") from exc
@@ -141,9 +160,10 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 local_strong = [b-elapsed for b in strong_beats if elapsed <= b < elapsed+duration]
                 speech_duration = min(duration, voice_durations[i]) if voice else duration
                 scene["spec"]["timing"] = {"start": round(elapsed, 3), "end": round(elapsed+duration, 3), "speech_duration": round(speech_duration, 3)}
+                if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
-                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed]}
+                hash_input = {"clip_format":2, "renderer":renderer_fingerprint, "profile":profile, "scene":hash_scene, "index":i, "count":len(scenes), "duration":duration, "beats":local_beats, "strong":local_strong, "fps":fps, "width":w, "height":h, "voice":[voice,voice_provider,voice_name,voice_speed,narration_mode], "cues":voice_cues[i] if voice else None}
                 fingerprint = hashlib.sha256(json.dumps(hash_input, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
                 old = old_scenes[i] if i < len(old_scenes) else {}
                 prior_clip = previous_dir / f"scene_{i}.mp4" if previous_dir else None
@@ -193,11 +213,10 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                             raise RuntimeError("编码失败：" + err.decode("utf-8", "replace")[-400:])
                     except Exception:
                         proc.kill(); proc.wait(); raise
-                manifest["scenes"].append({"fingerprint": fingerprint if cacheable else "", "voice_key": [scene["narration"], voice_provider, voice_name, voice_speed] if voice else None})
+                manifest["scenes"].append({"fingerprint": fingerprint if cacheable else "", "voice_key": speech.voice_cache_key(scene["narration"], voice_provider, voice_name, voice_speed, narration_mode, instruction) if voice else None})
                 clips.append(clip)
                 durations.append(duration)
-                parts = split_text(scene["narration"])
-                for part, (start, end) in zip(parts, caption_ranges(parts, duration, speech_duration)):
+                for part, start, end in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None):
                     start, end = elapsed + start, elapsed + end
                     captions.append(f"{len(captions)+1}\n{stamp(start)} --> {stamp(end)}\n{part}\n")
                 elapsed += duration

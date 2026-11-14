@@ -58,5 +58,8 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   sandbox.window.setStyle({});
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');
+  const measured=[{text:'短句。',start:0,end:.4},{text:'第二句。',start:.55,end:1.45}];
+  assert.equal(sandbox.captionForTime('短句。第二句。',.5,2,measured),'短句。');
+  assert.equal(sandbox.captionForTime('短句。第二句。',.55,2,measured),'第二句。');
   console.log('Network, scattering, growth and beat-bound event checks passed.');
 })().catch(e=>{console.error(e);process.exitCode=1});

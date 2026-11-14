@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from . import director, render, browser_render, audio, style_profile
 from .providers import model_registry, siliconflow
-from .services import media_assets
+from .services import media_assets, speech
 from .agents import visual_reviewer, animation_builder
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,6 +54,7 @@ class RenderRequest(BaseModel):
     voice_name: str = "anna"
     voice_speed: float = Field(default=1.0, ge=.5, le=2)
     generate_media: bool = False
+    narration_mode: str = "scene"
 
 
 class SceneEdit(BaseModel):
@@ -459,6 +460,8 @@ def start_render(pid: str, body: RenderRequest):
         raise HTTPException(400, "不支持该渲染选项。")
     if body.voice_provider not in {"edge", "siliconflow", "moss"}:
         raise HTTPException(400, "不支持该配音方式。")
+    if body.narration_mode not in {"scene", "sentence"}:
+        raise HTTPException(400, "不支持该字幕对齐方式。")
     if body.voice and body.voice_provider != "edge" and not model_registry.api_key():
         raise HTTPException(400, "硅基流动配音需要配置 API Key。")
     if body.generate_media and body.engine == "light":
@@ -473,6 +476,8 @@ def start_render(pid: str, body: RenderRequest):
     issues = director.visual_issues(plan)
     if issues:
         raise HTTPException(400, "；".join(issues) + "。请使用 AI 优化对应镜头或选择其他视觉类型，再生成视频。")
+    if body.voice and body.narration_mode == "sentence" and sum(len(speech.sentence_chunks(s["narration"])) for s in plan["scenes"]) > 32:
+        raise HTTPException(400, "逐句配音最多 32 段，请缩短口播或选择整镜配音。")
     light_visuals = {"question", "dots", "network", "formula", "compare", "flow", "ending", "distinct"}
     unsupported = [str(i + 1) for i, scene in enumerate(plan["scenes"]) if scene["visual"] not in light_visuals]
     if body.engine == "light" and unsupported:
@@ -484,10 +489,10 @@ def start_render(pid: str, body: RenderRequest):
         raise HTTPException(409, "已有视频正在渲染，请等待完成后再试。")
     run_id = uuid.uuid4().hex[:12]
     old_job = plan.get("job") or {}
-    last_completed = ({k: old_job.get(k) for k in ("run_id", "duration", "voice", "stale")}
+    last_completed = ({k: old_job.get(k) for k in ("run_id", "duration", "voice", "stale", "narration_mode")}
                       if old_job.get("status") == "done" else old_job.get("last_completed"))
     previous_run = (last_completed or {}).get("run_id")
-    job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "last_completed": last_completed}
+    job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "narration_mode": body.narration_mode, "last_completed": last_completed}
     plan["job"] = job
     cancelled = threading.Event()
 
@@ -516,9 +521,9 @@ def start_render(pid: str, body: RenderRequest):
             check_cancel()
             if body.engine == "browser":
                 music = project_dir(pid) / "music.bin" if plan.get("music") else None
-                duration = browser_render.render(plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run)
+                duration = browser_render.render(plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run, narration_mode=body.narration_mode)
             else:
-                duration = render.render(plan, project_dir(pid) / run_id, body.voice, update, plan.get("target_seconds"), body.voice_provider, body.voice_name, body.voice_speed, report)
+                duration = render.render(plan, project_dir(pid) / run_id, body.voice, update, plan.get("target_seconds"), body.voice_provider, body.voice_name, body.voice_speed, report, narration_mode=body.narration_mode)
         except Exception as exc:
             error = exc
         finally:
