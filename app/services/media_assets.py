@@ -13,9 +13,11 @@ def prepare(plan, directory, update, persist):
         plan.setdefault("warnings", []).append("分镜中没有选择 AI 图片或视频素材，因此未调用生图或视频模型。")
         persist()
         return
+    check_cancel = getattr(update, "check_cancel", lambda: None)
     asset_dir = directory / "assets"
     asset_dir.mkdir(exist_ok=True)
     for idx, scene in enumerate(plan["scenes"]):
+        check_cancel()
         media = scene["spec"]["media"]
         kind = media.get("kind")
         if kind not in {"image", "video"}:
@@ -39,8 +41,11 @@ def prepare(plan, directory, update, persist):
                 event = {"role": "image", "model": model(image_role), "status": "submitted"}
                 media["submission_state"] = "uncertain"
                 plan.setdefault("usage_events", []).append(event); persist()
+                check_cancel()
                 url = siliconflow.image(styled_prompt, role=image_role)
+                check_cancel()
                 siliconflow.download(url, target, 30*1024*1024)
+                check_cancel()
                 with Image.open(target) as img:
                     if img.width * img.height > 20_000_000:
                         raise ValueError("图片尺寸过大")
@@ -51,6 +56,7 @@ def prepare(plan, directory, update, persist):
                 if not request_id:
                     media["submission_state"] = "uncertain"
                     persist()
+                    check_cancel()
                     request_id = siliconflow.video_submit(styled_prompt, 5)
                     media["request_id"] = request_id
                     media["submission_state"] = "submitted"
@@ -60,9 +66,13 @@ def prepare(plan, directory, update, persist):
                     event = next((e for e in reversed(plan.get("usage_events", [])) if e.get("request_id") == request_id), None)
                 deadline = time.monotonic() + 600
                 while time.monotonic() < deadline:
+                    check_cancel()
                     status, url = siliconflow.video_status(request_id)
+                    check_cancel()
                     if status == "Succeed":
-                        siliconflow.download(url, target, 30*1024*1024); break
+                        siliconflow.download(url, target, 30*1024*1024)
+                        check_cancel()
+                        break
                     update(f"镜头 {idx+1} 的视频素材：{status}")
                     time.sleep(5)
                 else:

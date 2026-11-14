@@ -666,6 +666,35 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(events), 2)
         self.assertIn('不要编造数据', chat.call_args_list[1].args[1][-1]['content'])
 
+    def test_cancel_after_video_submit_preserves_request_id_and_skips_poll(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            scene={'spec':{'media':{'kind':'video','prompt':'sky','asset_id':'','request_id':'','submission_state':''}}}
+            plan={'scenes':[scene]}; cancelled=[False];snapshots=[]
+            def update(_):pass
+            def check():
+                if cancelled[0]: raise render.RenderCancelled()
+            update.check_cancel=check
+            def submit(*args):cancelled[0]=True;return 'task-123'
+            with patch.object(siliconflow,'video_submit',side_effect=submit),patch.object(siliconflow,'video_status') as status:
+                with self.assertRaises(render.RenderCancelled):media_assets.prepare(plan,Path(folder),update,lambda:snapshots.append(json.loads(json.dumps(plan))))
+            status.assert_not_called()
+            self.assertEqual(snapshots[-1]['scenes'][0]['spec']['media']['request_id'],'task-123')
+            self.assertEqual(snapshots[-1]['scenes'][0]['spec']['media']['submission_state'],'submitted')
+
+    def test_cancel_after_video_status_skips_download(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            scene={'spec':{'media':{'kind':'video','prompt':'','asset_id':'','request_id':'task-123','submission_state':'submitted'}}}
+            cancelled=[False]
+            def update(_):pass
+            def check():
+                if cancelled[0]:raise render.RenderCancelled()
+            update.check_cancel=check
+            def status(_):cancelled[0]=True;return ('Succeed','mock-url')
+            with patch.object(siliconflow,'video_status',side_effect=status),patch.object(siliconflow,'download') as download:
+                with self.assertRaises(render.RenderCancelled):media_assets.prepare({'scenes':[scene]},Path(folder),update,lambda:None)
+            download.assert_not_called()
+            self.assertEqual(scene['spec']['media']['request_id'],'task-123')
+
     def test_existing_video_task_is_resumed_when_prompt_is_empty(self):
         with tempfile.TemporaryDirectory(dir='data') as folder:
             root=Path(folder);scene={'spec':{'media':{'kind':'video','prompt':'','asset_id':'','request_id':'task-123','submission_state':'submitted'}}}
