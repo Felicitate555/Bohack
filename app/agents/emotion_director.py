@@ -57,6 +57,15 @@ def build(raw, scenes):
                 beat['actual'] += ' 已启用本地合成的轻微揭晓音效。'
             elif item.get('sound_effect') not in (None, '', 'none'):
                 beat['actual'] += ' 请求的音效不受支持，未应用。'
+            if execution == 'delayed_reveal':
+                answer = scene['spec']['parameters']['candidates'][-1].strip()
+                if len(answer) >= 2:
+                    if answer in scene.get('heading', ''):
+                        beat['actual'] += ' 注意：标题已包含最终候选，可能提前揭晓。'
+                    if answer in scene.get('detail', ''):
+                        beat['actual'] += ' 注意：补充文字已包含最终候选，可能提前揭晓。'
+                    if not scene['spec']['animation'].get('narration_delay') and answer in scene.get('narration', ''):
+                        beat['actual'] += ' 注意：无旁白前停顿且口播包含最终候选，请检查揭晓时序。'
             occupied.add(index)
         result['beats'].append(beat)
     if not any(beat['scene_index'] is not None for beat in result['beats']):

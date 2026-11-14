@@ -147,6 +147,15 @@ class EmotionalDirectionTests(unittest.TestCase):
             result=main.update_project(p['id'],p)
             self.assertTrue(result['reviews']['0']['stale'])
 
+    def test_early_answer_in_heading_is_reported_without_changing_authored_text(self):
+        from app.agents import emotion_director
+        scene=self.scene();scene['heading']='答案是23'
+        p=director.validate({'scenes':[scene]})
+        result=emotion_director.build({'emotional_goal':'期待','beats':[{'scene_index':0,'kind':'期待',
+            'execution':'delayed_reveal','pause_before_narration':1}]},p['scenes'])
+        self.assertEqual(p['scenes'][0]['heading'],'答案是23')
+        self.assertIn('标题已包含',result['beats'][0]['actual'])
+
     def test_invalid_emotion_scene_index_is_reported_and_not_applied(self):
         from app.agents import emotion_director
         p=director.validate({'scenes':[self.scene()]})
