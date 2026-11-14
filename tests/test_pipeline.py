@@ -767,6 +767,28 @@ class PipelineTests(unittest.TestCase):
             self.assertIn('素材',saved['preview_job']['message'])
             self.assertTrue(any('素材加载失败' in w for w in saved['warnings']))
 
+    def test_render_warnings_are_scoped_to_run_and_preserve_history(self):
+        class ImmediateThread:
+            def __init__(self,target,**kwargs):self.target=target
+            def start(self):self.target()
+        def renderer(plan,outdir,*args,**kwargs):
+            outdir.mkdir(parents=True,exist_ok=True);(outdir/'video.mp4').write_bytes(b'video');(outdir/'subtitles.srt').write_text('',encoding='utf-8')
+            plan.setdefault('warnings',[]).append('本次素材回退')
+            return 4
+        with tempfile.TemporaryDirectory(dir='data') as folder,patch.object(main,'DATA',Path(folder)),patch.object(main.threading,'Thread',ImmediateThread),patch.object(browser_render,'available',return_value=True),patch.object(browser_render,'render',side_effect=renderer):
+            p=main.create(main.Create(example=True));p['warnings']=['历史素材失败'];main.save(p['id'],p)
+            main.start_render(p['id'],main.RenderRequest())
+            saved=main.read_project(p['id'])
+            self.assertEqual(saved['job']['warnings'],['本次素材回退'])
+            self.assertIn('历史素材失败',saved['warnings'])
+            self.assertIn('本次素材回退',saved['warnings'])
+            with patch.object(browser_render,'render',side_effect=lambda plan,outdir,*a,**k:4):
+                main.start_render(p['id'],main.RenderRequest())
+            retried=main.read_project(p['id'])
+            self.assertEqual(retried['job']['warnings'],[])
+            self.assertEqual(retried['job']['last_completed']['warnings'],['本次素材回退'])
+            self.assertIn('本次素材回退',retried['warnings'])
+
     def test_missing_local_asset_warns_and_is_not_cached(self):
         plan=director.validate(director.example());plan['scenes']=plan['scenes'][:1]
         plan['scenes'][0]['spec']['media'].update(kind='image',asset_id='a'*32)

@@ -578,18 +578,21 @@ def start_render(pid: str, body: RenderRequest):
     unsupported = [str(i + 1) for i, scene in enumerate(plan["scenes"]) if scene["visual"] not in light_visuals]
     if body.engine == "light" and unsupported:
         raise HTTPException(400, "轻量渲染暂不支持镜头 " + "、".join(unsupported) + " 的动效，请选择浏览器渲染器或修改这些镜头。")
+    run_warnings = []
     if not body.generate_media and any((s.get("spec", {}).get("media") or {}).get("kind") in {"image", "video"} and not (s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
-        message = "部分镜头原本计划使用 AI 素材，但此次未开启素材生成，已使用程序动画。"
-        if message not in plan.setdefault("warnings", []): plan["warnings"].append(message)
+        run_warnings.append("部分镜头原本计划使用 AI 素材，但此次未开启素材生成，已使用程序动画。")
     if not render_lock.acquire(blocking=False):
         raise HTTPException(409, "已有视频正在渲染，请等待完成后再试。")
     run_id = uuid.uuid4().hex[:12]
     old_job = plan.get("job") or {}
-    last_completed = ({k: old_job.get(k) for k in ("run_id", "duration", "voice", "stale", "narration_mode")}
+    last_completed = ({k: old_job.get(k) for k in ("run_id", "duration", "voice", "stale", "narration_mode", "warnings")}
                       if old_job.get("status") == "done" else old_job.get("last_completed"))
     previous_run = (last_completed or {}).get("run_id")
     job = {"status": "running", "message": "准备素材", "run_id": run_id, "voice": body.voice, "narration_mode": body.narration_mode, "last_completed": last_completed}
     plan["job"] = job
+    plan.setdefault("usage_events", [])
+    job["warnings"] = run_warnings
+    work_plan = {**plan, "warnings": run_warnings}
     cancelled = threading.Event()
 
     def work():
@@ -613,18 +616,21 @@ def start_render(pid: str, body: RenderRequest):
         try:
             check_cancel()
             if body.generate_media:
-                media_assets.prepare(plan, project_dir(pid), update, persist)
+                media_assets.prepare(work_plan, project_dir(pid), update, persist)
             check_cancel()
             if body.engine == "browser":
                 music = project_dir(pid) / "music.bin" if plan.get("music") else None
-                duration = browser_render.render(plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run, narration_mode=body.narration_mode)
+                duration = browser_render.render(work_plan, project_dir(pid) / run_id, body.voice, update, body.quality, music, (plan.get("music") or {}).get("analysis"), body.music_volume, body.voice_provider, body.voice_name, body.voice_speed, report, previous_run, narration_mode=body.narration_mode)
             else:
-                duration = render.render(plan, project_dir(pid) / run_id, body.voice, update, plan.get("target_seconds"), body.voice_provider, body.voice_name, body.voice_speed, report, narration_mode=body.narration_mode)
+                duration = render.render(work_plan, project_dir(pid) / run_id, body.voice, update, plan.get("target_seconds"), body.voice_provider, body.voice_name, body.voice_speed, report, narration_mode=body.narration_mode)
         except Exception as exc:
             error = exc
         finally:
             try:
                 with render_tasks_lock:
+                    plan["job"]["warnings"] = list(run_warnings)
+                    for warning in run_warnings:
+                        if warning not in plan.setdefault("warnings", []): plan["warnings"].append(warning)
                     if cancelled.is_set():
                         message = "渲染已取消。" + ("之前的成片仍可使用。" if last_completed else "")
                         plan["job"].update({"status": "cancelled", "message": message})
