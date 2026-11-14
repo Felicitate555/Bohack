@@ -26,6 +26,17 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertEqual(plan['scenes'][0]['spec']['animation']['motion'],'linear')
         self.assertEqual(plan['scenes'][0]['spec']['parameters']['candidates'],['100','50','23'])
 
+    def test_scattering_uses_gradual_discovery_instead_of_guess_sequence(self):
+        from app.agents import emotion_director
+        scene={'heading':'同一束阳光，为什么天空会变色？','narration':'光进入大气后会改变方向。','key':'阳光与大气','visual':'scattering',
+               'spec':{'parameters':{'optical_path':'short'}}}
+        p=director.validate({'title':'天空','scenes':[scene]})
+        result=emotion_director.build({'emotional_goal':'从熟悉的景象逐渐理解原因',
+            'beats':[{'scene_index':0,'kind':'发现','execution':'progressive'}]},p['scenes'])
+        self.assertTrue(result['beats'][0]['applied'])
+        self.assertEqual(p['scenes'][0]['spec']['animation']['keyframes'],[.08,.8])
+        self.assertEqual(p['scenes'][0]['visual'],'scattering')
+
     def test_conflicting_beats_do_not_claim_both_timing_actions(self):
         from app.agents import emotion_director
         p=director.validate({'scenes':[self.scene()]})
