@@ -4,10 +4,13 @@ from .creative_brief import PRODUCTION_PRINCIPLES, RENDERER_CONTRACT
 from .. import style_profile
 
 
-def improve(scene, instruction, profile=None):
+def improve(scene, instruction, profile=None, emotion_beats=None):
     system = PRODUCTION_PRINCIPLES + "\n" + RENDERER_CONTRACT + """
 你负责按用户要求修改一个现有镜头，输出完整的 JSON 镜头对象，而不是项目或场景数组。优先保留原有准确的知识点、口播和数值，仅在用户要求或确有错误时修改；不得丢失组件必需的数据。让画面表达知识本身，避免只把英文内部标签放大。若要求当前组件无法实现，就选最接近且不误导的组件，不能用 action 文字假装已经实现。
 输出字段必须包括 heading、narration、key、detail、visual 和 spec。所有输出仅作声明式数据，不得包含代码。"""
+    if emotion_beats:
+        system += "\n当前有效情绪意图：" + json.dumps(emotion_beats, ensure_ascii=False)[:2500]
+        system += "\n优先保留其问题、变化和知识回报；仅使用引擎可执行的动作，不声称已经验证情绪效果。"
     system += "\n" + style_profile.director_context(profile)
     content, event = siliconflow.chat("animation", [{"role": "system", "content": system}, {"role": "user", "content": json.dumps({"scene": scene, "request": instruction}, ensure_ascii=False)}], max_tokens=2500)
     return siliconflow.parse_json(content), event

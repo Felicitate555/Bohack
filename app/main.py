@@ -324,6 +324,20 @@ def scene_asset(pid: str, index: int):
     return FileResponse(path, media_type="image/png" if kind == "image" else "video/mp4")
 
 
+def invalidate_scene_assessments(plan, indices):
+    indices = set(indices)
+    if not indices:
+        return
+    emotion = plan.get("emotion_plan")
+    if isinstance(emotion, dict):
+        emotion["status"] = "stale"
+        emotion["message"] = "分镜已修改，原情绪规划可能不再对应，请重新核对。"
+    for index in indices:
+        review = (plan.get("reviews") or {}).get(str(index))
+        if isinstance(review, dict):
+            review["stale"] = True
+
+
 @app.post("/api/projects/{pid}/scenes/{index}/media/reset")
 def reset_scene_media(pid: str, index: int):
     plan = read_project(pid)
@@ -332,6 +346,7 @@ def reset_scene_media(pid: str, index: int):
         raise HTTPException(409, "任务运行时不能重置素材。")
     media = scene.get("spec", {}).get("media", {})
     media.update({"asset_id": "", "request_id": "", "submission_state": ""})
+    invalidate_scene_assessments(plan, [index])
     if plan.get("job") and plan["job"].get("status") == "done": plan["job"]["stale"] = True
     if (plan.get("preview_job") or {}).get("index") == index: plan["preview_job"]["status"] = "stale"
     save(pid, plan)
@@ -345,13 +360,24 @@ def improve_scene(pid: str, index: int, body: SceneEdit):
     if (plan.get("job") or {}).get("status") == "running" or (plan.get("preview_job") or {}).get("status") == "running":
         raise HTTPException(409, "渲染中无法修改镜头。")
     try:
-        revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"))
+        emotion = plan.get("emotion_plan") or {}
+        beats = [b for b in emotion.get("beats", []) if isinstance(b, dict) and b.get("scene_index") == index] if emotion.get("status") == "generated" else []
+        revised, usage = animation_builder.improve(scene, body.instruction, profile=plan.get("style_profile"), emotion_beats=beats)
+        if isinstance(revised, dict):
+            if not isinstance(revised.get("spec"), dict): revised["spec"] = {}
+            if not isinstance(revised["spec"].get("animation"), dict): revised["spec"]["animation"] = {}
+            original_animation = scene.get("spec", {}).get("animation", {})
+            for key in ("narration_delay", "reveal_on_narration", "sound_effect"):
+                if key not in revised["spec"]["animation"] and key in original_animation:
+                    revised["spec"]["animation"][key] = original_animation[key]
         validated = director.validate({"title": plan["title"], "topic": plan["topic"], "scenes": [revised], "style_profile": plan.get("style_profile")})["scenes"][0]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     # Preserve the existing local media; model output never selects file paths.
     validated["spec"]["media"] = scene["spec"]["media"]
     plan["scenes"][index] = validated
+    if director.validate({"scenes": [scene], "style_profile": plan.get("style_profile")})["scenes"][0] != validated:
+        invalidate_scene_assessments(plan, [index])
     if (plan.get("preview_job") or {}).get("index") == index: plan["preview_job"]["status"] = "stale"
     plan.setdefault("usage_events", []).append(usage)
     if plan.get("job") and plan["job"].get("status") == "done": plan["job"]["stale"] = True
@@ -420,6 +446,8 @@ def review_scene(pid: str, index: int):
         result, usage = visual_reviewer.review(scene, frames, profile=plan.get("style_profile"), emotion_beats=beats)
     except (ValueError, subprocess.SubprocessError) as exc:
         raise HTTPException(400, "审片失败，请检查网络、模型权限和预览视频。") from exc
+    if isinstance(result, dict):
+        result["stale"] = False
     plan.setdefault("reviews", {})[str(index)] = result
     plan.setdefault("usage_events", []).append(usage)
     save(pid, plan)
@@ -443,15 +471,17 @@ def update_project(pid: str, body: dict):
     plan.update({"id": pid, "mode": old["mode"], "creative_mode": old.get("creative_mode", "smart"), "usage": old.get("usage", {}), "usage_events": old.get("usage_events", []), "knowledge_script": old.get("knowledge_script"), "warnings": old.get("warnings", []), "job": job, "music": old.get("music"), "target_seconds": old.get("target_seconds"), "edited": True})
     if isinstance(old.get("emotion_plan"), dict):
         plan["emotion_plan"] = copy.deepcopy(old["emotion_plan"])
-        if director.validate(old)["scenes"] != plan["scenes"]:
-            plan["emotion_plan"]["status"] = "stale"
-            plan["emotion_plan"]["message"] = "分镜已修改，原情绪规划可能不再对应，请重新核对。"
     plan["style_profile"] = style_profile.normalize(body.get("style_profile", old.get("style_profile")))
     if style_profile.normalize(old.get("style_profile")) != plan["style_profile"] and any((s.get("spec", {}).get("media") or {}).get("asset_id") for s in plan["scenes"]):
         notice = "风格已更改，已有素材仍沿用原文件；如需新风格，请在对应镜头主动重置素材后重新生成。"
         if notice not in plan["warnings"]: plan["warnings"].append(notice)
     plan["preview_job"] = old.get("preview_job")
-    plan["reviews"] = old.get("reviews", {})
+    plan["reviews"] = copy.deepcopy(old.get("reviews", {}))
+    old_scenes = director.validate(old)["scenes"]
+    style_changed = style_profile.normalize(old.get("style_profile")) != plan["style_profile"]
+    changed = [i for i, scene in enumerate(plan["scenes"]) if style_changed or i >= len(old_scenes) or old_scenes[i] != scene]
+    changed += list(range(len(plan["scenes"]), len(old_scenes)))
+    invalidate_scene_assessments(plan, changed)
     plan["planning_job"] = old.get("planning_job")
     preview = plan.get("preview_job") or {}
     i = preview.get("index")

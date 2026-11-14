@@ -100,6 +100,53 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertFalse(result['beats'][0]['applied'])
         self.assertIn('镜头',result['beats'][0]['actual'])
 
+    def test_optimization_omissions_preserve_existing_narration_and_sound_settings(self):
+        import copy
+        with tempfile.TemporaryDirectory(dir='data') as folder, patch.object(main,'DATA',Path(folder)):
+            p=main.create(main.Create(example=True))
+            settings={'narration_delay':1.2,'reveal_on_narration':True,'sound_effect':'soft_reveal'}
+            p['scenes'][0]['spec']['animation'].update(settings);main.save(p['id'],p)
+            revised=copy.deepcopy(p['scenes'][0])
+            for key in settings:revised['spec']['animation'].pop(key)
+            with patch.object(main.animation_builder,'improve',return_value=(revised,{'role':'animation'})):
+                result=main.improve_scene(p['id'],0,main.SceneEdit())
+            for key,value in settings.items():self.assertEqual(result['scenes'][0]['spec']['animation'][key],value)
+
+    def test_local_improvement_invalidates_emotion_and_old_review(self):
+        import copy
+        with tempfile.TemporaryDirectory(dir='data') as folder, patch.object(main,'DATA',Path(folder)):
+            p=main.create(main.Create(example=True))
+            p['emotion_plan']={'status':'generated','beats':[{'scene_index':0,'kind':'期待'}]}
+            p['reviews']={'0':{'summary':'old review'},'1':{'summary':'other scene'}}
+            main.save(p['id'],p)
+            revised=copy.deepcopy(p['scenes'][0]);revised['heading']='新的镜头'
+            with patch.object(main.animation_builder,'improve',return_value=(revised,{'role':'animation'})) as improve:
+                result=main.improve_scene(p['id'],0,main.SceneEdit())
+            self.assertEqual(result['emotion_plan']['status'],'stale')
+            self.assertTrue(result['reviews']['0']['stale'])
+            self.assertNotIn('stale',result['reviews']['1'])
+            self.assertEqual(improve.call_args.kwargs['emotion_beats'][0]['kind'],'期待')
+
+    def test_new_asset_invalidates_review_of_old_image(self):
+        from app.services import media_assets
+        from PIL import Image
+        with tempfile.TemporaryDirectory(dir='data') as folder:
+            p=director.validate({'scenes':[self.scene()]})
+            p['reviews']={'0':{'summary':'previous image'}}
+            p['scenes'][0]['spec']['media'].update(kind='image',prompt='a studio')
+            def download(url,target,*args):Image.new('RGB',(16,16)).save(target,format='PNG')
+            with patch.object(main.siliconflow,'image',return_value='test-url'),patch.object(main.siliconflow,'download',side_effect=download):
+                media_assets.prepare(p,Path(folder),lambda _:None,lambda:None)
+            self.assertTrue(p['reviews']['0']['stale'])
+            self.assertTrue(p['scenes'][0]['spec']['media']['asset_id'])
+
+    def test_manual_edit_marks_changed_scene_review_stale(self):
+        with tempfile.TemporaryDirectory(dir='data') as folder, patch.object(main,'DATA',Path(folder)):
+            p=main.create(main.Create(example=True));p['reviews']={'0':{'summary':'old'}};main.save(p['id'],p)
+            p['scenes'][0]['narration']='修改后的口播。'
+            result=main.update_project(p['id'],p)
+            self.assertTrue(result['reviews']['0']['stale'])
+
     def test_invalid_emotion_scene_index_is_reported_and_not_applied(self):
         from app.agents import emotion_director
         p=director.validate({'scenes':[self.scene()]})

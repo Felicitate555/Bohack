@@ -69,6 +69,8 @@ def prepare(plan, directory, update, persist):
                     raise siliconflow.ProviderError("视频任务仍在处理，可重试并继续查询原任务。")
             media["asset_id"] = asset_id
             media["submission_state"] = ""
+            review = (plan.get("reviews") or {}).get(str(idx))
+            if isinstance(review, dict): review["stale"] = True
             if (plan.get("preview_job") or {}).get("index") == idx:
                 plan["preview_job"]["status"] = "stale"
             if kind == "video": media["request_id"] = ""
