@@ -26,6 +26,61 @@ class EmotionalDirectionTests(unittest.TestCase):
         self.assertEqual(plan['scenes'][0]['spec']['animation']['motion'],'linear')
         self.assertEqual(plan['scenes'][0]['spec']['parameters']['candidates'],['100','50','23'])
 
+    def test_narration_delay_shifts_subtitles_and_preserves_bounded_scene_setting(self):
+        from app import render
+        scene=self.scene(); scene['spec']['animation']={'narration_delay':1.2}
+        saved=director.validate({'scenes':[scene]})['scenes'][0]
+        self.assertEqual(saved['spec']['animation']['narration_delay'],1.2)
+        self.assertEqual(director.validate({'scenes':[saved]})['scenes'][0]['spec']['animation']['narration_delay'],1.2)
+        cues=[{'text':'你猜需要多少人？','start':0,'end':.8}]
+        self.assertEqual(list(render.caption_timeline(saved['narration'],3,1,cues,delay=1.2)), [('你猜需要多少人？',1.2,3)])
+        saved['spec']['timing']={'speech_duration':1,'narration_delay':1.2,'caption_cues':cues}
+        with patch.object(render, 'text_fit') as text:
+            render.frame(saved,0,1,.5,3)
+            self.assertNotIn(saved['narration'],[c.args[2] for c in text.call_args_list])
+        scene['spec']['animation']['narration_delay']=99
+        self.assertEqual(director.validate({'scenes':[scene]})['scenes'][0]['spec']['animation']['narration_delay'],0)
+
+    def test_unvoiced_caption_estimates_fit_after_pause(self):
+        from app import render
+        parts=list(render.caption_timeline('第一句很长很长很长很长，第二句也很长很长很长很长，最后结尾。',4,4,delay=2))
+        self.assertTrue(parts)
+        self.assertTrue(all(2 <= start < end <= 4 for _,start,end in parts))
+
+    def test_muxed_narration_has_real_leading_silence(self):
+        import subprocess
+        import numpy as np
+        from app import browser_render
+        with tempfile.TemporaryDirectory(dir='data') as d:
+            root=Path(d); base=root/'base.mp4'; tone=root/'tone.wav'; result=root/'out.mp4'
+            subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=size=160x90:rate=15:duration=3',
+                            '-c:v','libx264','-pix_fmt','yuv420p',str(base)],check=True)
+            subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=16000:duration=1',str(tone)],check=True)
+            browser_render.mux_audio(base,result,[tone],[3],None,.18,[1.2])
+            pcm=subprocess.run(['ffmpeg','-v','error','-i',str(result),'-ac','1','-ar','16000','-f','f32le','-'],check=True,capture_output=True).stdout
+            samples=np.frombuffer(pcm,dtype='<f4')
+            rms=lambda a,b: float(np.sqrt(np.mean(samples[int(a*16000):int(b*16000)]**2)))
+            self.assertLess(rms(.3,1.0),.001)
+            self.assertGreater(rms(1.4,2.0),.02)
+            self.assertLess(rms(2.5,2.8),.001)
+
+    def test_emotion_director_respects_requested_pause(self):
+        from app.agents import emotion_director
+        p=director.validate({'scenes':[self.scene()]})
+        result=emotion_director.build({'emotional_goal':'等待','beats':[{'scene_index':0,'kind':'期待',
+            'execution':'delayed_reveal','pause_before_narration':1.2}]},p['scenes'])
+        self.assertEqual(p['scenes'][0]['spec']['animation']['narration_delay'],1.2)
+        self.assertEqual(result['beats'][0]['narration_delay'],1.2)
+        self.assertTrue(p['scenes'][0]['spec']['animation']['reveal_on_narration'])
+        from app import render
+        p['scenes'][0]['spec']['timing']={'speech_duration':1,'narration_delay':1.2}
+        with patch.object(render,'text_fit') as text:
+            render.frame(p['scenes'][0],0,1,1,5)
+            self.assertNotIn('23',[c.args[2] for c in text.call_args_list])
+        with patch.object(render,'text_fit') as text:
+            render.frame(p['scenes'][0],0,1,1.2,5)
+            self.assertIn('23',[c.args[2] for c in text.call_args_list])
+
     def test_scattering_uses_gradual_discovery_instead_of_guess_sequence(self):
         from app.agents import emotion_director
         scene={'heading':'同一束阳光，为什么天空会变色？','narration':'光进入大气后会改变方向。','key':'阳光与大气','visual':'scattering',

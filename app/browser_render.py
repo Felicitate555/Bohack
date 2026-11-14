@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .render import run, stamp, caption_timeline, RenderCancelled
+from .render import run, stamp, caption_timeline, scene_narration_delay, RenderCancelled
 from .services import speech
 from .providers.siliconflow import ProviderError
 from . import style_profile
@@ -40,7 +40,7 @@ def music_mix_filter(duration, volume, voice, voice_input="0:a", music_input="1:
             "[voice][ducked]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
 
 
-def mux_audio(base, output, voices, durations, music, music_volume):
+def mux_audio(base, output, voices, durations, music, music_volume, delays=None):
     """Encode narration once after joining sample-aligned per-scene audio."""
     command = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(base)]
     for voice in voices:
@@ -49,7 +49,8 @@ def mux_audio(base, output, voices, durations, music, music_volume):
         command += ["-i", str(music)]
     filters = []
     for i, duration in enumerate(durations if voices else []):
-        filters.append(f"[{i+1}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration={duration},asetpts=PTS-STARTPTS[v{i}]")
+        delay = round((delays[i] if delays else 0) * 1000)
+        filters.append(f"[{i+1}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay={delay}:all=1,apad,atrim=duration={duration},asetpts=PTS-STARTPTS[v{i}]")
     if voices:
         filters.append("".join(f"[v{i}]" for i in range(len(voices))) + f"concat=n={len(voices)}:v=0:a=1[narr]")
     total = sum(durations)
@@ -137,7 +138,8 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             raise RuntimeError("配音生成或音频解析失败。请检查所选配音服务的网络连接和 FFprobe，或更换配音服务。") from exc
-    minimums = [max(3.0, voice_durations[i] + .6) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8)) for i, s in enumerate(scenes)]
+    delays = [scene_narration_delay(scene) for scene in scenes]
+    minimums = [max(3.0, voice_durations[i] + .6 + delays[i]) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8) + delays[i]) for i, s in enumerate(scenes)]
     extension = max(0, (project.get("target_seconds") or 0) - sum(minimums)) / len(scenes)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=browser_path(), headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -158,8 +160,8 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 duration = frames / fps
                 local_beats = [b-elapsed for b in beats if elapsed <= b < elapsed+duration]
                 local_strong = [b-elapsed for b in strong_beats if elapsed <= b < elapsed+duration]
-                speech_duration = min(duration, voice_durations[i]) if voice else duration
-                scene["spec"]["timing"] = {"start": round(elapsed, 3), "end": round(elapsed+duration, 3), "speech_duration": round(speech_duration, 3)}
+                speech_duration = min(duration - delays[i], voice_durations[i]) if voice else duration - delays[i]
+                scene["spec"]["timing"] = {"start": round(elapsed, 3), "end": round(elapsed+duration, 3), "speech_duration": round(speech_duration, 3), "narration_delay": delays[i]}
                 if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
                 hash_scene = dict(scene)
                 hash_scene["spec"] = {k:v for k,v in scene["spec"].items() if k != "timing"}
@@ -216,7 +218,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
                 manifest["scenes"].append({"fingerprint": fingerprint if cacheable else "", "voice_key": speech.voice_cache_key(scene["narration"], voice_provider, voice_name, voice_speed, narration_mode, instruction) if voice else None})
                 clips.append(clip)
                 durations.append(duration)
-                for part, start, end in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None):
+                for part, start, end in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None, delays[i]):
                     start, end = elapsed + start, elapsed + end
                     captions.append(f"{len(captions)+1}\n{stamp(start)} --> {stamp(end)}\n{part}\n")
                 elapsed += duration
@@ -228,7 +230,7 @@ def render(project, outdir, voice, update, quality="preview", music=None, beat_t
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(outdir / "concat.txt"), "-c", "copy", str(base)])
     output = outdir / "video.mp4"
     if voice or music:
-        mux_audio(base, output, [outdir / f"voice_{i}.mp3" for i in range(len(scenes))] if voice else [], durations, music, music_volume)
+        mux_audio(base, output, [outdir / f"voice_{i}.mp3" for i in range(len(scenes))] if voice else [], durations, music, music_volume, delays)
     else:
         base.replace(output)
     check_cancel()

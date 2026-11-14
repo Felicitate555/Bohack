@@ -174,7 +174,12 @@ def frame(scene, index, count, t, duration, profile=None):
     elif visual == "question":
         params = (scene.get("spec") or {}).get("parameters") or {}
         candidates = params.get("candidates") or []
-        shown = candidates[min(len(candidates)-1, int(progress*len(candidates)))] if candidates else scene["key"]
+        delay = (scene.get("spec") or {}).get("timing", {}).get("narration_delay", 0)
+        if candidates and len(candidates) > 1 and animation.get("reveal_on_narration") and delay > 0:
+            choice = len(candidates)-1 if t >= delay else min(len(candidates)-2, int((t / delay) * (len(candidates)-1)))
+        else:
+            choice = min(len(candidates)-1, int(progress*len(candidates))) if candidates else 0
+        shown = candidates[choice] if candidates else scene["key"]
         styled_text(d, (480, 242), shown, 70, GOLD, 800, "mm")
         d.line((350, 314, 610, 314), fill=(95, 80, 52), width=1)
     else:
@@ -186,8 +191,8 @@ def frame(scene, index, count, t, duration, profile=None):
     # Sentence-level subtitle timing uses the actual scene duration.
     timing = scene.get("spec", {}).get("timing", {})
     speech_duration = timing.get("speech_duration", duration)
-    captions = list(caption_timeline(scene["narration"], duration, speech_duration, timing.get("caption_cues")))
-    caption = next((part for part, start, end in captions if start <= t < end), captions[-1][0] if captions else "")
+    captions = list(caption_timeline(scene["narration"], duration, speech_duration, timing.get("caption_cues"), timing.get("narration_delay", 0)))
+    caption = next((part for part, start, end in captions if start <= t < end), "")
     styled_text(d, (480, style["layout"]["subtitle_y"]-7), caption, typography["subtitle_size"], WHITE, W-margin*2, "mm")
     d.line((margin, 510, margin + int((W-margin*2) * ((index + min(t / duration, 1)) / count)), 510), fill=GOLD, width=2)
     return im
@@ -216,15 +221,22 @@ def caption_ranges(parts, duration, speech_duration):
         yield start, end
 
 
-def caption_timeline(text, duration, speech_duration, cues=None):
+def scene_narration_delay(scene):
+    from .scene_spec import bounded
+    animation = (scene.get("spec") or {}).get("animation") or {}
+    return bounded(animation.get("narration_delay"), 0, 2) or 0
+
+
+def caption_timeline(text, duration, speech_duration, cues=None, delay=0):
+    delay = max(0, min(delay, duration))
     if cues:
         for i, cue in enumerate(cues):
-            end = cues[i+1]['start'] if i+1 < len(cues) else duration
-            yield cue['text'], cue['start'], min(duration, end)
+            end = cues[i+1]['start'] + delay if i+1 < len(cues) else duration
+            yield cue['text'], cue['start'] + delay, min(duration, end)
     else:
         parts = split_text(text)
-        for part, (start, end) in zip(parts, caption_ranges(parts, duration, speech_duration)):
-            yield part, start, end
+        for part, (start, end) in zip(parts, caption_ranges(parts, duration - delay, min(speech_duration, duration - delay))):
+            yield part, start + delay, min(duration, end + delay)
 
 
 def render(project, outdir, voice, update, target_seconds=None, voice_provider="edge", voice_name="anna", voice_speed=1.0, report=lambda event: None, narration_mode="scene"):
@@ -258,7 +270,8 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             raise RuntimeError(str(exc)) from exc
         except Exception as exc:
             raise RuntimeError("配音生成或音频解析失败。请检查所选配音服务的网络连接和 FFprobe，或更换配音服务。") from exc
-    minimums = [max(3.0, voice_durations[i] + .6) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8)) for i, s in enumerate(scenes)]
+    delays = [scene_narration_delay(scene) for scene in scenes]
+    minimums = [max(3.0, voice_durations[i] + .6 + delays[i]) if voice else max(4.0, min(12.0, len(s["narration"]) / 4.2 + .8) + delays[i]) for i, s in enumerate(scenes)]
     extension = max(0, (target_seconds or 0) - sum(minimums)) / len(scenes)
     clips, captions, elapsed = [], [], 0.0
     for i, scene in enumerate(scenes):
@@ -267,13 +280,13 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
         duration = minimums[i] + extension
         frames = max(1, math.ceil(duration * FPS))
         duration = frames / FPS
-        speech_duration = min(duration, voice_durations[i]) if voice else duration
-        scene.setdefault("spec", {})["timing"] = {"start": round(elapsed, 3), "end": round(elapsed + duration, 3), "speech_duration": round(speech_duration, 3)}
+        speech_duration = min(duration - delays[i], voice_durations[i]) if voice else duration - delays[i]
+        scene.setdefault("spec", {})["timing"] = {"start": round(elapsed, 3), "end": round(elapsed + duration, 3), "speech_duration": round(speech_duration, 3), "narration_delay": delays[i]}
         if voice and voice_cues[i]: scene["spec"]["timing"]["caption_cues"] = voice_cues[i]
         clip = outdir / f"scene_{i}.mp4"
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "pipe:0"]
         if voice:
-            cmd += ["-i", str(audio), "-af", "apad", "-c:a", "aac", "-b:a", "96k"]
+            cmd += ["-i", str(audio), "-af", f"adelay={round(delays[i]*1000)}:all=1,apad", "-c:a", "aac", "-b:a", "96k"]
         cmd += ["-t", str(duration), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p", str(clip)]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
@@ -289,7 +302,7 @@ def render(project, outdir, voice, update, target_seconds=None, voice_provider="
             proc.wait()
             raise
         clips.append(clip)
-        for part, a, b in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None):
+        for part, a, b in caption_timeline(scene["narration"], duration, speech_duration, voice_cues[i] if voice else None, delays[i]):
             a, b = elapsed + a, elapsed + b
             captions.append(f"{len(captions)+1}\n{stamp(a)} --> {stamp(b)}\n{part}\n")
         elapsed += duration

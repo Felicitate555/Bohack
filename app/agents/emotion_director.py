@@ -1,4 +1,5 @@
 """Bounded emotional direction compiled into supported scene timing, never code."""
+from ..scene_spec import bounded
 
 
 def _text(value, limit=160):
@@ -32,7 +33,17 @@ def build(raw, scenes):
             scene['spec']['animation']['keyframes']=[.08,.8]
             scene['spec']['animation']['motion']='smooth'
             beat.update(applied=True,actual='浏览器引擎通过现有组件逐步建立画面，镜头 80% 左右完成；轻量引擎支持范围较小。')
-        if beat['applied']: occupied.add(index)
+        if beat['applied']:
+            pause = bounded(item.get('pause_before_narration'), 0, 2)
+            if pause is not None:
+                scene['spec']['animation']['narration_delay'] = pause
+                beat['narration_delay'] = pause
+                if execution == 'delayed_reveal' and pause > 0:
+                    scene['spec']['animation']['reveal_on_narration'] = True
+                    beat['actual'] = f'答案与旁白、字幕在 {pause:g} 秒后同时出现；请核对标题是否提前泄露。'
+                else:
+                    beat['actual'] += f' 旁白和字幕延后 {pause:g} 秒。'
+            occupied.add(index)
         result['beats'].append(beat)
     if not result['beats']:
         return {'status':'fallback','message':'情绪节点无效，保留基础分镜；未应用额外情绪动作。','beats':[]}

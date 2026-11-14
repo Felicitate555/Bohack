@@ -151,7 +151,7 @@ def scene_spec(scene):
         "visual_type": visual,
         "elements": elements,
         "layout": {"safe_margin": 0.06, "composition": "left-title-right-graphic", "graphic_x": number(layout.get("graphic_x"), 650, 520, 750), "graphic_y": number(layout.get("graphic_y"), 255, 200, 300)},
-        "animation": {"action": str(animation.get("action", "逐步呈现"))[:80], "motion": motion, "keyframes": [start, finish], "beat_binding": bool(animation.get("beat_binding", True)), "events": animation_events(animation.get("events")), "node_motions": motions, "node_motions_invalid": motions_invalid},
+        "animation": {"action": str(animation.get("action", "逐步呈现"))[:80], "motion": motion, "keyframes": [start, finish], "narration_delay": bounded(animation.get("narration_delay"), 0, 2) or 0, "reveal_on_narration": animation.get("reveal_on_narration") is True, "beat_binding": bool(animation.get("beat_binding", True)), "events": animation_events(animation.get("events")), "node_motions": motions, "node_motions_invalid": motions_invalid},
         "transition": raw.get("transition") if raw.get("transition") in {"fade", "cut"} else "fade",
         "style": {"background": "#0b0b0f", "accent": "#d6b36a", "text": "#f5f1e8"},
         "media": {"kind": media.get("kind") if media.get("kind") in {"animation", "image", "video"} else "animation", "prompt": str(media.get("prompt") or "")[:1000], "asset_id": asset_id, "request_id": request_id, "submission_state": media.get("submission_state") if media.get("submission_state") in {"uncertain", "submitted"} else ""},

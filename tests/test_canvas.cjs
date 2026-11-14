@@ -58,6 +58,12 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   sandbox.window.setStyle({});
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],1.9,10), '短句');
   assert.equal(sandbox.captionAt(['短句','长长长长长长长长'],2.1,10), '长长长长长长长长');
+  let delayed=scene('question',{candidates:['50','23']});delayed.spec.timing={speech_duration:1,narration_delay:1,caption_cues:[{text:'一句解释。',start:0,end:.8}]};
+  await draw(delayed,.5);assert(!texts.includes('一句解释。'), 'caption must wait for narration delay');
+  await draw(delayed,1.1);assert(texts.includes('一句解释。'), 'caption must appear after narration delay');
+  delayed.spec.animation.reveal_on_narration=true;
+  await draw(delayed,.9);assert(!texts.includes('23'), 'answer must wait for narration');
+  await draw(delayed,1);assert(texts.includes('23'), 'answer must reveal when narration begins');
   const measured=[{text:'短句。',start:0,end:.4},{text:'第二句。',start:.55,end:1.45}];
   assert.equal(sandbox.captionForTime('短句。第二句。',.5,2,measured),'短句。');
   assert.equal(sandbox.captionForTime('短句。第二句。',.55,2,measured),'第二句。');
