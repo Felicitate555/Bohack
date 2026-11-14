@@ -51,6 +51,8 @@ async function draw(s,t=4){texts=[];lines=0;endpoints=[];await sandbox.window.re
   searching.spec.parameters.target=18;await draw(searching);assert(texts.includes('未找到目标值'));
   assert(sandbox.videoSeekTarget(.09,.08)<.08, 'short videos must never seek beyond duration');
   assert(sandbox.videoSeekTarget(1,0.04)<.04, 'single-frame video must stay within media duration');
+  assert.equal(sandbox.needsLightMediaBackdrop('#f0e0c0'),true, 'light background needs protective reading area');
+  assert.equal(sandbox.needsLightMediaBackdrop('#08090b'),false, 'default dark style keeps existing layout');
   const birthday=sandbox.distinctProbability(365,23);
   assert(Math.abs(birthday-.4927027657)<.0000001, '23 uniform independent draws should produce the correct distinct probability');
   assert.equal(sandbox.distinctProbability(2,3),0, 'more draws than categories must produce a collision');
